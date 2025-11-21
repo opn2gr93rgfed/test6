@@ -729,8 +729,22 @@ def load_csv_data() -> List[Dict]:
         for line in lines:
             stripped = line.strip()
 
-            # Skip empty lines and comments at start
-            if not stripped or stripped.startswith('#'):
+            # Skip empty lines
+            if not stripped:
+                continue
+
+            # Check if comment is a special command - if yes, keep it
+            if stripped.startswith('#'):
+                comment_lower = stripped.lower()
+                # Special commands that should be preserved
+                is_special_command = (
+                    re.match(r'#\s*pause\s*\d+', comment_lower) or  # #pause10
+                    comment_lower in ['#scrolldown', '#scroll', '#scrollup', '#scrollmid', '#toggle_switches', '#optional']
+                )
+                if is_special_command:
+                    # Keep special command for later processing
+                    cleaned_lines.append(line)
+                # Skip regular comments
                 continue
 
             # Skip imports
