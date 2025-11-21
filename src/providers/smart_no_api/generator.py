@@ -1504,11 +1504,24 @@ def load_csv_data() -> List[Dict]:
     capture_patterns_config = {patterns_str}
 
     def get_nested_value(data, field_path):
-        """Извлекает значение по пути field.subfield.subsubfield"""
+        """
+        Извлекает значение по пути field.subfield.subsubfield
+        Поддерживает массивы: field.array.0.subfield
+        """
         keys = field_path.split('.')
         value = data
         for key in keys:
-            if isinstance(value, dict) and key in value:
+            # Проверяем, является ли ключ числовым индексом для массива
+            if isinstance(value, list):
+                try:
+                    index = int(key)
+                    if 0 <= index < len(value):
+                        value = value[index]
+                    else:
+                        return None
+                except ValueError:
+                    return None
+            elif isinstance(value, dict) and key in value:
                 value = value[key]
             else:
                 return None
