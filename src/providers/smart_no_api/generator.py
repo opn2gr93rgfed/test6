@@ -1426,7 +1426,11 @@ def main():
         task_data = (thread_id, iteration_number, data_row, len(csv_data))
         tasks.append(task_data)
 
-    print(f"\\n[MAIN] Запуск {len(tasks)} задач в {THREADS_COUNT} потоках...")
+    # Ограничить количество потоков количеством задач
+    actual_threads = min(THREADS_COUNT, len(csv_data))
+    print(f"\\n[MAIN] Запуск {len(tasks)} задач в {actual_threads} потоках...")
+    if actual_threads < THREADS_COUNT:
+        print(f"[MAIN] [INFO] Потоков ограничено до {actual_threads} (количество строк CSV)")
     print(f"[MAIN] {'='*60}")
 
     # Запуск многопоточной обработки
@@ -1434,7 +1438,7 @@ def main():
     fail_count = 0
     results = []
 
-    with ThreadPoolExecutor(max_workers=THREADS_COUNT) as executor:
+    with ThreadPoolExecutor(max_workers=actual_threads) as executor:
         # Отправить все задачи в пул
         future_to_task = {executor.submit(process_task, task): task for task in tasks}
 
@@ -1463,7 +1467,7 @@ def main():
     print(f"[MAIN] ЗАВЕРШЕНО")
     print(f"[MAIN] Успешно: {success_count}/{len(csv_data)}")
     print(f"[MAIN] Ошибок: {fail_count}/{len(csv_data)}")
-    print(f"[MAIN] Использовано потоков: {THREADS_COUNT}")
+    print(f"[MAIN] Использовано потоков: {actual_threads}/{THREADS_COUNT}")
     if USE_PROXY_LIST:
         print(f"[MAIN] Использовано прокси: {len(PROXY_LIST)} ({PROXY_ROTATION_MODE})")
     print(f"{'='*60}")
