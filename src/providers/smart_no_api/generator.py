@@ -27,6 +27,7 @@ class Generator:
         proxy_list_config = config.get('proxy_list', {})  # 🔥 СПИСОК ПРОКСИ
         profile_config = config.get('profile', {})
         threads_count = config.get('threads_count', 1)  # 🔥 МНОГОПОТОЧНОСТЬ
+        network_capture_patterns = config.get('network_capture_patterns', [])  # 🌐 ПАТТЕРНЫ ДЛЯ ЗАХВАТА NETWORK RESPONSES
 
         # 🔥 СИМУЛЯЦИЯ ВВОДА ТЕКСТА
         self.simulate_typing = config.get('simulate_typing', True)
@@ -38,7 +39,7 @@ class Generator:
         script += self._generate_octobrowser_functions(profile_config)  # Убрал proxy_config - теперь прокси выбирается динамически
         script += self._generate_helpers()
         script += self._generate_csv_loader()
-        script += self._generate_main_iteration(user_code)
+        script += self._generate_main_iteration(user_code, network_capture_patterns)  # 🌐 Передаем паттерны
         script += self._generate_worker_function()  # 🔥 WORKER ФУНКЦИЯ ДЛЯ ПОТОКОВ
         script += self._generate_main_function()  # 🔥 ОБНОВЛЕННАЯ MAIN С МНОГОПОТОЧНОСТЬЮ
 
@@ -592,11 +593,9 @@ def check_heading(page, expected_texts, timeout=5000):
                 # Continue to next alternative
                 continue
 
-    # If no heading found, log warning but CONTINUE execution
+    # If no heading found, SILENTLY CONTINUE execution
     # This allows handling of dynamic flows, A/B tests, skipped questions, etc.
-    print(f"[CHECK_HEADING] [WARNING] Заголовок не найден из списка: {expected_texts}")
-    print(f"[CHECK_HEADING] [INFO] Это может быть нормально - сайт может показывать вопросы в разном порядке.")
-    print(f"[CHECK_HEADING] [INFO] Продолжаем выполнение...")
+    # No logging needed - this is expected behavior for dynamic forms
     # Even if heading not found, give page a moment to stabilize
     time.sleep(0.3)
     return False
@@ -863,6 +862,53 @@ def load_csv_data() -> List[Dict]:
         # Wrap all actions in resilient try-except blocks for dynamic flows
         return self._wrap_actions_for_resilience(cleaned_code)
 
+    def _add_timeout_to_action(self, code: str, timeout_ms: int = 15000) -> str:
+        """
+        Добавить явный timeout к Playwright действию
+
+        Добавляет timeout=15000 (или другое значение) к методам действий.
+        Это позволяет для #optional действий использовать короткий таймаут
+        вместо долгих retry с прогрессивными задержками.
+
+        Args:
+            code: Строка кода Playwright (например, page.click())
+            timeout_ms: Таймаут в миллисекундах (по умолчанию 15000 = 15 сек)
+
+        Returns:
+            Код с добавленным timeout параметром
+
+        Examples:
+            page.click() → page.click(timeout=15000)
+            page.fill("text") → page.fill("text", timeout=15000)
+            page.click(force=True) → page.click(force=True, timeout=15000)
+        """
+        import re
+
+        # Find the last method call in the chain (click, fill, press, etc.)
+        # Pattern: method_name( ... )
+        pattern = r'(\.(click|fill|press|type|check|uncheck|select_option|set_checked))\(([^)]*)\)'
+
+        def add_timeout(match):
+            method = match.group(1)  # .click, .fill, etc.
+            params = match.group(3).strip()  # existing parameters
+
+            # If there are existing parameters, add timeout as additional param
+            if params:
+                return f"{method}({params}, timeout={timeout_ms})"
+            else:
+                return f"{method}(timeout={timeout_ms})"
+
+        # Replace the last occurrence only (rightmost method in chain)
+        # Find all matches
+        matches = list(re.finditer(pattern, code))
+        if matches:
+            # Replace only the last match
+            last_match = matches[-1]
+            modified = add_timeout(last_match)
+            code = code[:last_match.start()] + modified + code[last_match.end():]
+
+        return code
+
     def _replace_fill_with_typing(self, code: str) -> str:
         """
         Замена .fill() на .press_sequentially() для симуляции человеческого ввода
@@ -907,6 +953,7 @@ def load_csv_data() -> List[Dict]:
         inside_with_block = False
         with_block_indent = 0
         next_action_optional = False  # Track #optional marker
+        next_action_scroll_search = False  # Track #scroll_search marker
         current_page_context = 'page'  # Track current page context (page, page1, page2, page3)
 
         while i < len(lines):
@@ -938,6 +985,18 @@ def load_csv_data() -> List[Dict]:
                     indent = with_block_indent + 4
                 indent_str = ' ' * indent
                 wrapped_lines.append(f"{indent_str}# Next action is optional (will not fail script if element not found)")
+                i += 1
+                continue
+
+            # Check for #scroll_search marker
+            if stripped.lower() == '#scroll_search':
+                next_action_scroll_search = True
+                # Calculate correct indentation (accounting for 'with' blocks)
+                indent = len(line) - len(line.lstrip())
+                if inside_with_block and indent <= with_block_indent:
+                    indent = with_block_indent + 4
+                indent_str = ' ' * indent
+                wrapped_lines.append(f"{indent_str}# Next action will use aggressive scroll search (will search entire page with scrolling)")
                 i += 1
                 continue
 
@@ -1043,6 +1102,73 @@ def load_csv_data() -> List[Dict]:
             # Check if this is a popup page action (page1/page2/page3) that needs retry logic
             is_popup_action = is_action and any(f'page{n}.' in stripped for n in [1, 2, 3])
 
+            # If #scroll_search marker was set, generate aggressive scroll search code
+            if next_action_scroll_search and is_action:
+                action_desc = self._extract_action_description(stripped)
+                action_desc = action_desc.replace("'", "'").replace("'", "'").replace('"', '\\"')
+                sanitized_code = stripped.replace("'", "'").replace("'", "'")
+                sanitized_code = self._replace_fill_with_typing(sanitized_code)
+
+                # 🔥 FIX: If #optional was also set, add short timeout to scroll_search attempts
+                # This prevents 90+ second waits (3 positions × 30s default timeout)
+                scroll_timeout = 10000  # Default: 10 seconds per scroll position
+                if next_action_optional:
+                    scroll_timeout = 8000  # Shorter timeout for optional elements: 8 seconds
+                    wrapped_lines.append(f"{indent_str}# This is an OPTIONAL scroll search (short timeout)")
+
+                # Add explicit timeout to the action
+                sanitized_code = self._add_timeout_to_action(sanitized_code, timeout_ms=scroll_timeout)
+
+                # Extract page variable (page, page1, page2, page3)
+                import re
+                match = re.search(r'(page\d*)\.', stripped)
+                page_var = match.group(1) if match else 'page'
+
+                # Extract element selector for logging
+                selector_part = stripped.split(f'{page_var}.')[1] if f'{page_var}.' in stripped else stripped
+
+                wrapped_lines.append(f"{indent_str}# Aggressive scroll search: try multiple scroll positions and retries")
+                wrapped_lines.append(f"{indent_str}scroll_search_found = False")
+                wrapped_lines.append(f"{indent_str}scroll_positions = [")
+                wrapped_lines.append(f"{indent_str}    ('bottom', 'document.body.scrollHeight'),  # Scroll to bottom")
+                wrapped_lines.append(f"{indent_str}    ('middle', 'document.body.scrollHeight / 2'),  # Scroll to middle")
+                wrapped_lines.append(f"{indent_str}    ('top', '0'),  # Scroll to top")
+                wrapped_lines.append(f"{indent_str}]")
+                wrapped_lines.append(f"{indent_str}")
+                wrapped_lines.append(f"{indent_str}for scroll_name, scroll_pos in scroll_positions:")
+                wrapped_lines.append(f"{indent_str}    if scroll_search_found:")
+                wrapped_lines.append(f"{indent_str}        break")
+                wrapped_lines.append(f"{indent_str}    ")
+                wrapped_lines.append(f'{indent_str}    print(f"[SCROLL_SEARCH] Scrolling to {{scroll_name}}, searching for: {selector_part[:50]}...", flush=True)')
+                wrapped_lines.append(f"{indent_str}    try:")
+                wrapped_lines.append(f"{indent_str}        # Scroll to position")
+                wrapped_lines.append(f"{indent_str}        {page_var}.evaluate(f'window.scrollTo(0, {{scroll_pos}})')")
+                wrapped_lines.append(f"{indent_str}        time.sleep(1)  # Wait for content to load after scroll")
+                wrapped_lines.append(f"{indent_str}        ")
+                wrapped_lines.append(f"{indent_str}        # Wait for page to stabilize")
+                wrapped_lines.append(f"{indent_str}        try:")
+                wrapped_lines.append(f"{indent_str}            {page_var}.wait_for_load_state('domcontentloaded', timeout=3000)")
+                wrapped_lines.append(f"{indent_str}        except:")
+                wrapped_lines.append(f"{indent_str}            pass")
+                wrapped_lines.append(f"{indent_str}        ")
+                wrapped_lines.append(f"{indent_str}        # Try to find and interact with element (with timeout={scroll_timeout}ms)")
+                wrapped_lines.append(f"{indent_str}        {sanitized_code}")
+                wrapped_lines.append(f'{indent_str}        print(f"[SCROLL_SEARCH] [OK] Element found at {{scroll_name}}: {action_desc}", flush=True)')
+                wrapped_lines.append(f"{indent_str}        scroll_search_found = True")
+                wrapped_lines.append(f"{indent_str}        break")
+                wrapped_lines.append(f"{indent_str}    except PlaywrightTimeout:")
+                wrapped_lines.append(f'{indent_str}        print(f"[SCROLL_SEARCH] Element not found at {{scroll_name}}, trying next position...", flush=True)')
+                wrapped_lines.append(f"{indent_str}        continue")
+                wrapped_lines.append(f"{indent_str}")
+                wrapped_lines.append(f"{indent_str}if not scroll_search_found:")
+                wrapped_lines.append(f'{indent_str}    print(f"[SCROLL_SEARCH] [WARNING] Element not found after searching entire page: {action_desc}", flush=True)')
+                wrapped_lines.append(f'{indent_str}    print(f"[SCROLL_SEARCH] [INFO] Continuing execution (element may not be required)...", flush=True)')
+
+                next_action_scroll_search = False  # Reset marker
+                next_action_optional = False  # Reset optional marker (both flags consumed)
+                i += 1
+                continue
+
             # Wrap action in try-except if it's resilient (not critical)
             if is_action and not is_critical:
                 # Extract action description for logging (sanitize quotes)
@@ -1056,6 +1182,10 @@ def load_csv_data() -> List[Dict]:
 
                 # 🔥 Replace .fill() with .press_sequentially() for human typing simulation
                 sanitized_code = self._replace_fill_with_typing(sanitized_code)
+
+                # 🔥 Add explicit short timeout for optional actions (originally marked with #optional)
+                # This adds timeout=15000 (15 seconds) to the action call
+                sanitized_code = self._add_timeout_to_action(sanitized_code, timeout_ms=15000)
 
                 wrapped_lines.append(f"{indent_str}try:")
                 wrapped_lines.append(f"{indent_str}    {sanitized_code}")
@@ -1210,6 +1340,7 @@ def load_csv_data() -> List[Dict]:
         special_commands = [
             '#toggle_switches',
             '#optional',
+            '#scroll_search',
             '#scrolldown',
             '#scroll',
             '#scrollup',
@@ -1233,6 +1364,7 @@ def load_csv_data() -> List[Dict]:
         - #scrollmid - скролл к середине страницы
         - #toggle_switches - переключить switches (снять первый checked, поставить первый unchecked)
         - #optional - следующее действие опционально (обернуть в try-except, даже если это page2)
+        - #scroll_search - агрессивный поиск элемента по всей странице (скролл вверх-вниз-середина)
 
         Args:
             page_context: Текущий контекст страницы (page, page1, page2, page3)
@@ -1362,9 +1494,143 @@ def load_csv_data() -> List[Dict]:
 
         return "action"
 
-    def _generate_main_iteration(self, user_code: str) -> str:
+    def _generate_main_iteration(self, user_code: str, network_capture_patterns: List = None) -> str:
         # Clean user code from Playwright Recorder boilerplate
         cleaned_code = self._clean_user_code(user_code)
+
+        # 🌐 Generate network response capture code if patterns are provided
+        network_capture_code = ""
+        csv_append_code = ""
+
+        if network_capture_patterns and len(network_capture_patterns) > 0:
+            patterns_str = json.dumps(network_capture_patterns, ensure_ascii=False)
+            network_capture_code = f'''
+        # ============================================================
+        # 🌐 ЗАХВАТ NETWORK RESPONSES (Developer Tools) + ИЗВЛЕЧЕНИЕ ПОЛЕЙ
+        # ============================================================
+        captured_data = {{}}
+        extracted_fields = {{}}  # Словарь для извлеченных полей: {{field_name: value}}
+        capture_patterns_config = {patterns_str}
+
+        def get_nested_value(data, field_path):
+            """
+            Извлекает значение по пути field.subfield.subsubfield
+            Поддерживает массивы: field.array.0.subfield
+            """
+            keys = field_path.split('.')
+            value = data
+            for key in keys:
+                # Проверяем, является ли ключ числовым индексом для массива
+                if isinstance(value, list):
+                    try:
+                        index = int(key)
+                        if 0 <= index < len(value):
+                            value = value[index]
+                        else:
+                            return None
+                    except ValueError:
+                        return None
+                elif isinstance(value, dict) and key in value:
+                    value = value[key]
+                else:
+                    return None
+            return value
+
+        def handle_response(response):
+            """Обработчик network responses - перехватывает данные и извлекает указанные поля"""
+            try:
+                url = response.url
+                # Проверяем каждый паттерн из конфига
+                for pattern_config in capture_patterns_config:
+                    pattern = pattern_config.get('pattern', '')
+                    fields = pattern_config.get('fields', [])
+
+                    if pattern.lower() in url.lower():
+                        print(f"[NETWORK_CAPTURE] Перехвачен ответ: {{url}}", flush=True)
+                        try:
+                            # Получаем JSON данные из ответа
+                            json_data = response.json()
+
+                            # Сохраняем полные данные для отладки
+                            if pattern not in captured_data:
+                                captured_data[pattern] = []
+                            captured_data[pattern].append({{
+                                'url': url,
+                                'status': response.status,
+                                'data': json_data
+                            }})
+
+                            # 🔥 ИЗВЛЕЧЕНИЕ КОНКРЕТНЫХ ПОЛЕЙ
+                            if fields:
+                                print(f"[NETWORK_CAPTURE] Извлекаю поля: {{fields}}", flush=True)
+                                for field in fields:
+                                    field_value = get_nested_value(json_data, field)
+                                    if field_value is not None:
+                                        extracted_fields[field] = field_value
+                                        print(f"[NETWORK_CAPTURE]   {{field}} = {{field_value}}", flush=True)
+                                    else:
+                                        print(f"[NETWORK_CAPTURE]   {{field}} не найдено в response", flush=True)
+                            else:
+                                # Если полей нет - сохраняем весь response
+                                print(f"[NETWORK_CAPTURE] Полный response сохранен для '{{pattern}}'", flush=True)
+                                print(f"[NETWORK_CAPTURE] Preview: {{str(json_data)[:200]}}...", flush=True)
+                        except Exception as e:
+                            print(f"[NETWORK_CAPTURE] Не удалось распарсить JSON: {{e}}", flush=True)
+                        break
+            except Exception as e:
+                # Игнорируем ошибки при обработке - не должны ломать основной флоу
+                pass
+
+        # Регистрируем обработчик для всех network responses
+        page.on("response", handle_response)
+        print("[NETWORK_CAPTURE] Обработчик зарегистрирован", flush=True)
+        print(f"[NETWORK_CAPTURE] Паттерны и поля: {{capture_patterns_config}}", flush=True)
+'''
+
+            # 🔥 ГЕНЕРАЦИЯ КОДА ДОБАВЛЕНИЯ В CSV
+            csv_append_code = '''
+        # 🌐 Добавление извлеченных полей в CSV
+        if extracted_fields:
+            print(f"\\n[CSV_APPEND] Добавляю извлеченные поля в CSV...", flush=True)
+            try:
+                csv_path = 'data.csv'  # Путь к CSV файлу
+
+                # Читаем существующий CSV
+                import csv
+                import os
+
+                if os.path.exists(csv_path):
+                    with open(csv_path, 'r', encoding='utf-8') as f:
+                        reader = csv.DictReader(f)
+                        rows = list(reader)
+                        headers = reader.fieldnames if reader.fieldnames else []
+
+                    # Добавляем новые заголовки для извлеченных полей (если их еще нет)
+                    new_headers = list(headers)
+                    for field_name in extracted_fields.keys():
+                        if field_name not in new_headers:
+                            new_headers.append(field_name)
+                            print(f"[CSV_APPEND] Добавлена новая колонка: {field_name}", flush=True)
+
+                    # Обновляем текущую строку (iteration_number - 1, т.к. индекс с 0)
+                    row_index = iteration_number - 1
+                    if 0 <= row_index < len(rows):
+                        for field_name, field_value in extracted_fields.items():
+                            rows[row_index][field_name] = str(field_value)
+                            print(f"[CSV_APPEND] Строка {iteration_number}: {field_name} = {field_value}", flush=True)
+
+                    # Записываем обновленный CSV
+                    with open(csv_path, 'w', encoding='utf-8', newline='') as f:
+                        writer = csv.DictWriter(f, fieldnames=new_headers)
+                        writer.writeheader()
+                        writer.writerows(rows)
+
+                    print(f"[CSV_APPEND] ✅ CSV обновлен: {len(extracted_fields)} полей добавлено", flush=True)
+                else:
+                    print(f"[CSV_APPEND] ⚠️ CSV файл не найден: {csv_path}", flush=True)
+            except Exception as e:
+                print(f"[CSV_APPEND] ❌ Ошибка записи в CSV: {e}", flush=True)
+'''
 
         return f'''# ============================================================
 # ОСНОВНАЯ ФУНКЦИЯ ИТЕРАЦИИ
@@ -1383,11 +1649,21 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
     print(f"[ITERATION {{iteration_number}}] Начало")
     print(f"{'='*60}")
 
-    try:
+    try:{network_capture_code}
         # ============================================================
         # ДЕЙСТВИЯ ПОЛЬЗОВАТЕЛЯ (очищены от Playwright boilerplate)
         # ============================================================
 {self._indent_code(cleaned_code, 8)}
+{csv_append_code}
+        # 🌐 Вывод захваченных данных (если есть)
+        if 'captured_data' in locals() and captured_data:
+            print(f"\\n[NETWORK_CAPTURE] === ИТОГОВЫЕ ДАННЫЕ ===")
+            for pattern, entries in captured_data.items():
+                print(f"[NETWORK_CAPTURE] Паттерн '{{pattern}}': {{len(entries)}} ответов")
+                for i, entry in enumerate(entries, 1):
+                    print(f"[NETWORK_CAPTURE]   {{i}}. URL: {{entry['url']}}")
+                    print(f"[NETWORK_CAPTURE]      Status: {{entry['status']}}")
+                    print(f"[NETWORK_CAPTURE]      Data keys: {{list(entry['data'].keys()) if isinstance(entry['data'], dict) else 'Not a dict'}}")
 
         print(f"[ITERATION {{iteration_number}}] [OK] Завершено успешно")
         return True

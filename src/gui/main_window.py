@@ -635,6 +635,24 @@ Selenium:
 
         self.toggle_parametrization_options()
 
+        # === NETWORK CAPTURE ===
+        network_frame = ttk.LabelFrame(scrollable_frame, text="🌐 Захват Network Response (Developer Tools)", padding=10)
+        network_frame.pack(fill=tk.X, padx=5, pady=5)
+
+        ttk.Label(network_frame, text="Паттерны для захвата (через запятую):").pack(anchor=tk.W, pady=(0, 2))
+        ttk.Label(network_frame, text="Пример: validate, api/submit, quotes",
+                 foreground="gray", font=("Consolas", 8)).pack(anchor=tk.W, pady=(0, 5))
+
+        self.network_patterns_entry = ttk.Entry(network_frame, width=50)
+        self.network_patterns_entry.pack(fill=tk.X, pady=(0, 5))
+
+        ttk.Label(network_frame,
+                 text="💡 Скрипт будет перехватывать все ответы, содержащие эти паттерны в URL",
+                 foreground="blue", font=("TkDefaultFont", 8)).pack(anchor=tk.W)
+        ttk.Label(network_frame,
+                 text="Данные будут доступны в переменной captured_data['pattern']",
+                 foreground="blue", font=("TkDefaultFont", 8)).pack(anchor=tk.W)
+
         # === SMS SERVICES ===
         sms_frame = ttk.LabelFrame(scrollable_frame, text="📱 SMS сервисы (номера и OTP)", padding=10)
         sms_frame.pack(fill=tk.X, padx=5, pady=5)
@@ -1412,6 +1430,13 @@ except Exception as e:
             # Генерация с правильным генератором
             if framework == 'playwright':
                 # Для Playwright адаптируем опции
+
+                # Парсим паттерны для network capture
+                network_patterns_raw = self.network_patterns_entry.get().strip()
+                network_patterns = []
+                if network_patterns_raw:
+                    network_patterns = [p.strip() for p in network_patterns_raw.split(',') if p.strip()]
+
                 playwright_config = {
                     'api_token': options.get('api_token', ''),
                     'use_proxy': 'proxy' in options.get('profile_config', {}),
@@ -1424,7 +1449,8 @@ except Exception as e:
                         'api_key': self.sms_api_key_entry.get().strip(),
                         'service': self.sms_service_var.get()
                     },
-                    'target': self.playwright_target_var.get()  # library или cdp
+                    'target': self.playwright_target_var.get(),  # library или cdp
+                    'network_capture_patterns': network_patterns  # 🌐 Паттерны для захвата Network responses
                 }
                 script_content = self.playwright_generator.generate_script(user_code, playwright_config)
             else:
