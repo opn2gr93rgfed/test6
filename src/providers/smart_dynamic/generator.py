@@ -777,7 +777,7 @@ def normalize_text(text: str) -> str:
     return text.strip().lower()
 
 
-def find_question_in_pool(question_text: str, pool: Dict) -> Optional[str]:
+def find_question_in_pool(question_text: str, pool: Dict, debug: bool = False) -> Optional[str]:
     """
     Ищет вопрос в пуле с нечетким сопоставлением
 
@@ -796,11 +796,17 @@ def find_question_in_pool(question_text: str, pool: Dict) -> Optional[str]:
     # 2. Нормализованное совпадение
     normalized_question = normalize_text(question_text)
 
+    if debug:
+        print(f"[SEARCH] Ищу вопрос: '{question_text}'")
+        print(f"[SEARCH] Нормализован: '{normalized_question}'")
+
     for pool_key in pool.keys():
         normalized_key = normalize_text(pool_key)
 
         # Точное совпадение нормализованных
         if normalized_question == normalized_key:
+            if debug:
+                print(f"[SEARCH] ✓ НАЙДЕНО (нормализованное): '{pool_key}'")
             return pool_key
 
         # Частичное совпадение - pool_key содержится в question_text или наоборот
@@ -808,7 +814,16 @@ def find_question_in_pool(question_text: str, pool: Dict) -> Optional[str]:
             # Проверяем что это действительно похожие вопросы (>70% совпадение длины)
             len_ratio = min(len(normalized_key), len(normalized_question)) / max(len(normalized_key), len(normalized_question))
             if len_ratio > 0.7:
+                if debug:
+                    print(f"[SEARCH] ✓ НАЙДЕНО (частичное, ratio={len_ratio:.2f}): '{pool_key}'")
                 return pool_key
+
+    if debug:
+        print(f"[SEARCH] ✗ НЕ НАЙДЕНО")
+        print(f"[SEARCH] Доступные ключи в пуле (первые 5):")
+        for i, key in enumerate(list(pool.keys())[:5]):
+            normalized = normalize_text(key)
+            print(f"[SEARCH]   {i+1}. '{key}' → '{normalized}'")
 
     return None
 
@@ -839,6 +854,12 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
     print(f"\\n[DYNAMIC_QA] Начинаю поиск вопросов на странице...")
     print(f"[DYNAMIC_QA] В пуле доступно {len(QUESTIONS_POOL)} вопросов")
 
+    # DEBUG: показываем первые 5 вопросов ИЗ ПУЛА
+    print(f"[DYNAMIC_QA] [DEBUG] Первые 5 вопросов в пуле:")
+    for i, (key, value) in enumerate(list(QUESTIONS_POOL.items())[:5]):
+        actions_count = len(value.get('actions', []))
+        print(f"[DYNAMIC_QA]   {i+1}. '{key}' (действий: {actions_count})")
+
     # Цикл поиска и ответа на вопросы
     while answered_count < max_questions:
         # Найти все heading на странице
@@ -866,7 +887,13 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
                     continue
 
                 # УМНЫЙ ПОИСК В СЛОВАРЕ (точное + нечеткое сопоставление)
-                pool_key = find_question_in_pool(question_text, QUESTIONS_POOL)
+                # Первая попытка - обычный поиск
+                pool_key = find_question_in_pool(question_text, QUESTIONS_POOL, debug=False)
+
+                # Если не нашли - повторяем с debug
+                if not pool_key and answered_count == 0:
+                    print(f"\\n[DYNAMIC_QA] [DEBUG] Не смог найти первый вопрос, включаю детальный поиск...")
+                    pool_key = find_question_in_pool(question_text, QUESTIONS_POOL, debug=True)
 
                 if pool_key:
                     print(f"\\n[DYNAMIC_QA] ✓ Найден вопрос на странице: {question_text}")
