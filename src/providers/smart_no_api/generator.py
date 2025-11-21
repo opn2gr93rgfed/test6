@@ -741,11 +741,10 @@ def load_csv_data() -> List[Dict]:
                     re.match(r'#\s*pause\s*\d+', comment_lower) or  # #pause10
                     comment_lower in ['#scrolldown', '#scroll', '#scrollup', '#scrollmid', '#toggle_switches', '#optional']
                 )
-                if is_special_command:
-                    # Keep special command for later processing
-                    cleaned_lines.append(line)
-                # Skip regular comments
-                continue
+                if not is_special_command:
+                    # Skip regular comments
+                    continue
+                # If it's a special command, DON'T continue - let it be processed through indentation handling below
 
             # Skip imports
             if stripped.startswith('import ') or stripped.startswith('from '):
