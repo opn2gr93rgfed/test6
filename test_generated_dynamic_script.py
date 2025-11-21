@@ -520,6 +520,52 @@ QUESTIONS_POOL = {
 # ФУНКЦИЯ МОМЕНТАЛЬНОГО ПОИСКА И ОТВЕТА НА ВОПРОСЫ
 # ============================================================
 
+def normalize_text(text: str) -> str:
+    """Нормализует текст для сравнения - убирает спецсимволы, лишние пробелы"""
+    import re
+    # Убираем звездочки, точки, восклицательные знаки в конце
+    text = re.sub(r'[*?.!]+\s*$', '', text)
+    # Убираем множественные пробелы
+    text = re.sub(r'\s+', ' ', text)
+    return text.strip().lower()
+
+
+def find_question_in_pool(question_text: str, pool: Dict) -> Optional[str]:
+    """
+    Ищет вопрос в пуле с нечетким сопоставлением
+
+    Пробует разные варианты:
+    1. Точное совпадение
+    2. Нормализованное совпадение (lowercase, убраны спецсимволы)
+    3. Частичное совпадение (substring)
+
+    Returns:
+        Ключ из pool если найден, иначе None
+    """
+    # 1. Точное совпадение
+    if question_text in pool:
+        return question_text
+
+    # 2. Нормализованное совпадение
+    normalized_question = normalize_text(question_text)
+
+    for pool_key in pool.keys():
+        normalized_key = normalize_text(pool_key)
+
+        # Точное совпадение нормализованных
+        if normalized_question == normalized_key:
+            return pool_key
+
+        # Частичное совпадение - pool_key содержится в question_text или наоборот
+        if normalized_key in normalized_question or normalized_question in normalized_key:
+            # Проверяем что это действительно похожие вопросы (>70% совпадение длины)
+            len_ratio = min(len(normalized_key), len(normalized_question)) / max(len(normalized_key), len(normalized_question))
+            if len_ratio > 0.7:
+                return pool_key
+
+    return None
+
+
 def answer_questions(page, data_row: Dict, max_questions: int = 100):
     """
     Находит все вопросы на странице и отвечает на них
@@ -528,7 +574,7 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
     1. Получить все heading элементы на странице
     2. Для каждого heading:
        - Извлечь текст вопроса
-       - Найти в QUESTIONS_POOL (O(1) lookup!)
+       - Найти в QUESTIONS_POOL (нечеткий поиск!)
        - Выполнить соответствующие действия
     3. Повторять пока есть новые вопросы
 
@@ -572,10 +618,15 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
                 if not question_text or len(question_text) < 3:
                     continue
 
-                # МОМЕНТАЛЬНЫЙ ПОИСК В СЛОВАРЕ O(1)
-                if question_text in QUESTIONS_POOL:
-                    print(f"\n[DYNAMIC_QA] ✓ Найден вопрос: {question_text}")
-                    question_data = QUESTIONS_POOL[question_text]
+                # УМНЫЙ ПОИСК В СЛОВАРЕ (точное + нечеткое сопоставление)
+                pool_key = find_question_in_pool(question_text, QUESTIONS_POOL)
+
+                if pool_key:
+                    print(f"\n[DYNAMIC_QA] ✓ Найден вопрос на странице: {question_text}")
+                    if pool_key != question_text:
+                        print(f"[DYNAMIC_QA] ✓ Сопоставлен с пулом: {pool_key}")
+
+                    question_data = QUESTIONS_POOL[pool_key]
 
                     # Выполнить специальные команды (если есть)
                     for command in question_data.get('special_commands', []):
@@ -592,7 +643,7 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
                                 button_text = action.get('value')
                                 print(f"[DYNAMIC_QA]   → Кликаю кнопку: {button_text}")
                                 page.get_by_role("button", name=button_text).click(timeout=10000)
-                                time.sleep(0.3)
+                                time.sleep(0.5)
 
                             # Заполнение текстового поля
                             elif action_type == 'textbox_fill':
@@ -606,7 +657,7 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
                                 textbox = page.get_by_role("textbox", name=field_name).first
                                 textbox.click(timeout=5000)
                                 textbox.fill(value, timeout=5000)
-                                time.sleep(0.2)
+                                time.sleep(0.3)
 
                             # Нажатие клавиши
                             elif action_type == 'press_key':
@@ -620,7 +671,7 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
                                 selector = action.get('selector')
                                 print(f"[DYNAMIC_QA]   → Кликаю элемент: {selector[:50]}...")
                                 page.locator(selector).first.click(timeout=10000)
-                                time.sleep(0.3)
+                                time.sleep(0.5)
 
                         except Exception as e:
                             print(f"[DYNAMIC_QA]   [ERROR] Не удалось выполнить действие: {e}")
@@ -634,7 +685,7 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
                     print(f"[DYNAMIC_QA] ✓ Вопрос обработан ({answered_count}/{max_questions})")
 
                     # Пауза для загрузки следующего вопроса
-                    time.sleep(1)
+                    time.sleep(1.5)
 
                     # Выйти из цикла headings и искать новые вопросы
                     break
@@ -646,6 +697,21 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
         # Если не нашли новых вопросов - выходим
         if not found_new_question:
             print(f"[DYNAMIC_QA] Новых вопросов не найдено, завершаю поиск")
+
+            # DEBUG: показываем первые 5 heading что были на странице
+            try:
+                headings = page.get_by_role("heading").all()
+                if len(headings) > 0:
+                    print(f"[DYNAMIC_QA] [DEBUG] Примеры heading на странице:")
+                    for i, h in enumerate(headings[:5]):
+                        try:
+                            text = h.inner_text().strip()
+                            print(f"[DYNAMIC_QA]   {i+1}. '{text}'")
+                        except:
+                            pass
+            except:
+                pass
+
             break
 
         # Небольшая пауза перед следующей итерацией поиска
