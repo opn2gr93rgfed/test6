@@ -1158,8 +1158,45 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
             if inside_with_block and current_indent <= with_block_indent and not stripped.startswith('with '):
                 inside_with_block = False
 
-            # Специальные команды (#pause, #scroll, etc.) - оставляем как есть
+            # Специальные команды (#pause, #scroll, etc.) - преобразуем в выполняемый код
             if stripped.startswith('#'):
+                indent_str = ' ' * current_indent
+                special_cmd = stripped.lower()
+
+                # #pause10, #pause5, etc.
+                pause_match = re.match(r'#\s*pause\s*(\d+)', special_cmd)
+                if pause_match:
+                    seconds = pause_match.group(1)
+                    result_lines.append(f"{indent_str}print(f'[PAUSE] Waiting {seconds} seconds...', flush=True)")
+                    result_lines.append(f"{indent_str}time.sleep({seconds})")
+                    i += 1
+                    continue
+
+                # #scrolldown or #scroll
+                if special_cmd in ['#scrolldown', '#scroll']:
+                    result_lines.append(f"{indent_str}print(f'[SCROLL] Scrolling down...', flush=True)")
+                    result_lines.append(f"{indent_str}page.evaluate('window.scrollTo(0, document.body.scrollHeight)')")
+                    result_lines.append(f"{indent_str}time.sleep(0.5)")
+                    i += 1
+                    continue
+
+                # #scrollup
+                if special_cmd == '#scrollup':
+                    result_lines.append(f"{indent_str}print(f'[SCROLL] Scrolling up...', flush=True)")
+                    result_lines.append(f"{indent_str}page.evaluate('window.scrollTo(0, 0)')")
+                    result_lines.append(f"{indent_str}time.sleep(0.5)")
+                    i += 1
+                    continue
+
+                # #scrollmid
+                if special_cmd == '#scrollmid':
+                    result_lines.append(f"{indent_str}print(f'[SCROLL] Scrolling to middle...', flush=True)")
+                    result_lines.append(f"{indent_str}page.evaluate('window.scrollTo(0, document.body.scrollHeight / 2)')")
+                    result_lines.append(f"{indent_str}time.sleep(0.5)")
+                    i += 1
+                    continue
+
+                # Неизвестная команда - оставляем как комментарий
                 result_lines.append(line)
                 i += 1
                 continue

@@ -773,7 +773,8 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
         # НАЧАЛЬНЫЕ ДЕЙСТВИЯ (до вопросов)
         # ============================================================
         page.goto("https://www.mytest.com/")
-        #pause10
+        print(f'[PAUSE] Waiting 10 seconds...', flush=True)
+        time.sleep(10)
         try:
             page.get_by_role("textbox", name="Enter your ZIP code").click()
         except PlaywrightTimeout:
@@ -828,7 +829,8 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
             print("[ACTION] [WARNING] Timeout - элемент не найден", flush=True)
             print("[ACTION] [INFO] Продолжаем выполнение...", flush=True)
             pass
-        #pause40
+        print(f'[PAUSE] Waiting 40 seconds...', flush=True)
+        time.sleep(40)
         #optional
         #scroll_search
         try:
