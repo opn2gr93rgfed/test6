@@ -907,6 +907,7 @@ def load_csv_data() -> List[Dict]:
         inside_with_block = False
         with_block_indent = 0
         next_action_optional = False  # Track #optional marker
+        next_action_scroll_search = False  # Track #scroll_search marker
         current_page_context = 'page'  # Track current page context (page, page1, page2, page3)
 
         while i < len(lines):
@@ -938,6 +939,18 @@ def load_csv_data() -> List[Dict]:
                     indent = with_block_indent + 4
                 indent_str = ' ' * indent
                 wrapped_lines.append(f"{indent_str}# Next action is optional (will not fail script if element not found)")
+                i += 1
+                continue
+
+            # Check for #scroll_search marker
+            if stripped.lower() == '#scroll_search':
+                next_action_scroll_search = True
+                # Calculate correct indentation (accounting for 'with' blocks)
+                indent = len(line) - len(line.lstrip())
+                if inside_with_block and indent <= with_block_indent:
+                    indent = with_block_indent + 4
+                indent_str = ' ' * indent
+                wrapped_lines.append(f"{indent_str}# Next action will use aggressive scroll search (will search entire page with scrolling)")
                 i += 1
                 continue
 
@@ -1042,6 +1055,62 @@ def load_csv_data() -> List[Dict]:
 
             # Check if this is a popup page action (page1/page2/page3) that needs retry logic
             is_popup_action = is_action and any(f'page{n}.' in stripped for n in [1, 2, 3])
+
+            # If #scroll_search marker was set, generate aggressive scroll search code
+            if next_action_scroll_search and is_action:
+                action_desc = self._extract_action_description(stripped)
+                action_desc = action_desc.replace("'", "'").replace("'", "'").replace('"', '\\"')
+                sanitized_code = stripped.replace("'", "'").replace("'", "'")
+                sanitized_code = self._replace_fill_with_typing(sanitized_code)
+
+                # Extract page variable (page, page1, page2, page3)
+                import re
+                match = re.search(r'(page\d*)\.', stripped)
+                page_var = match.group(1) if match else 'page'
+
+                # Extract element selector for logging
+                selector_part = stripped.split(f'{page_var}.')[1] if f'{page_var}.' in stripped else stripped
+
+                wrapped_lines.append(f"{indent_str}# Aggressive scroll search: try multiple scroll positions and retries")
+                wrapped_lines.append(f"{indent_str}scroll_search_found = False")
+                wrapped_lines.append(f"{indent_str}scroll_positions = [")
+                wrapped_lines.append(f"{indent_str}    ('bottom', 'document.body.scrollHeight'),  # Scroll to bottom")
+                wrapped_lines.append(f"{indent_str}    ('middle', 'document.body.scrollHeight / 2'),  # Scroll to middle")
+                wrapped_lines.append(f"{indent_str}    ('top', '0'),  # Scroll to top")
+                wrapped_lines.append(f"{indent_str}]")
+                wrapped_lines.append(f"{indent_str}")
+                wrapped_lines.append(f"{indent_str}for scroll_name, scroll_pos in scroll_positions:")
+                wrapped_lines.append(f"{indent_str}    if scroll_search_found:")
+                wrapped_lines.append(f"{indent_str}        break")
+                wrapped_lines.append(f"{indent_str}    ")
+                wrapped_lines.append(f'{indent_str}    print(f"[SCROLL_SEARCH] Scrolling to {{scroll_name}}, searching for: {selector_part[:50]}...", flush=True)')
+                wrapped_lines.append(f"{indent_str}    try:")
+                wrapped_lines.append(f"{indent_str}        # Scroll to position")
+                wrapped_lines.append(f"{indent_str}        {page_var}.evaluate(f'window.scrollTo(0, {{scroll_pos}})')")
+                wrapped_lines.append(f"{indent_str}        time.sleep(1)  # Wait for content to load after scroll")
+                wrapped_lines.append(f"{indent_str}        ")
+                wrapped_lines.append(f"{indent_str}        # Wait for page to stabilize")
+                wrapped_lines.append(f"{indent_str}        try:")
+                wrapped_lines.append(f"{indent_str}            {page_var}.wait_for_load_state('domcontentloaded', timeout=3000)")
+                wrapped_lines.append(f"{indent_str}        except:")
+                wrapped_lines.append(f"{indent_str}            pass")
+                wrapped_lines.append(f"{indent_str}        ")
+                wrapped_lines.append(f"{indent_str}        # Try to find and interact with element (with extended timeout)")
+                wrapped_lines.append(f"{indent_str}        {sanitized_code}")
+                wrapped_lines.append(f'{indent_str}        print(f"[SCROLL_SEARCH] [OK] Element found at {{scroll_name}}: {action_desc}", flush=True)')
+                wrapped_lines.append(f"{indent_str}        scroll_search_found = True")
+                wrapped_lines.append(f"{indent_str}        break")
+                wrapped_lines.append(f"{indent_str}    except PlaywrightTimeout:")
+                wrapped_lines.append(f'{indent_str}        print(f"[SCROLL_SEARCH] Element not found at {{scroll_name}}, trying next position...", flush=True)')
+                wrapped_lines.append(f"{indent_str}        continue")
+                wrapped_lines.append(f"{indent_str}")
+                wrapped_lines.append(f"{indent_str}if not scroll_search_found:")
+                wrapped_lines.append(f'{indent_str}    print(f"[SCROLL_SEARCH] [WARNING] Element not found after searching entire page: {action_desc}", flush=True)')
+                wrapped_lines.append(f'{indent_str}    print(f"[SCROLL_SEARCH] [INFO] Continuing execution (element may not be required)...", flush=True)')
+
+                next_action_scroll_search = False  # Reset marker
+                i += 1
+                continue
 
             # Wrap action in try-except if it's resilient (not critical)
             if is_action and not is_critical:
@@ -1210,6 +1279,7 @@ def load_csv_data() -> List[Dict]:
         special_commands = [
             '#toggle_switches',
             '#optional',
+            '#scroll_search',
             '#scrolldown',
             '#scroll',
             '#scrollup',
@@ -1233,6 +1303,7 @@ def load_csv_data() -> List[Dict]:
         - #scrollmid - скролл к середине страницы
         - #toggle_switches - переключить switches (снять первый checked, поставить первый unchecked)
         - #optional - следующее действие опционально (обернуть в try-except, даже если это page2)
+        - #scroll_search - агрессивный поиск элемента по всей странице (скролл вверх-вниз-середина)
 
         Args:
             page_context: Текущий контекст страницы (page, page1, page2, page3)
