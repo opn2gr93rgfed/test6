@@ -664,7 +664,19 @@ class PlaywrightParser:
         code_lines.append('# === END OCTO BROWSER POPUP HANDLER ===')
         code_lines.append('')
 
+        # 🔥 Отслеживание номера страницы для маркеров
+        current_page_number = 0
+        page_started = False
+
         for action in actions:
+            # 🔥 PAGE SECTION MARKER: Добавить маркер начала страницы при первом действии
+            if not page_started and action['type'] in ['goto', 'click', 'fill']:
+                code_lines.append(f'# {"="*80}')
+                code_lines.append(f'# 🎯 PAGE {current_page_number} START: Initial Form')
+                code_lines.append(f'# {"="*80}')
+                code_lines.append('')
+                page_started = True
+
             if action['type'] == 'goto':
                 code_lines.append(f'# Переход на страницу')
                 code_lines.append(f'try:')
@@ -735,6 +747,20 @@ class PlaywrightParser:
                 # Генерация кода для обработки попапов
                 page_var = action['page_var']
                 trigger_lines = action['trigger_lines']
+
+                # 🔥 PAGE SECTION MARKER: Закрыть предыдущую страницу и открыть новую
+                if page_started:
+                    code_lines.append(f'# {"="*80}')
+                    code_lines.append(f'# ✅ PAGE {current_page_number} END')
+                    code_lines.append(f'# {"="*80}')
+                    code_lines.append('')
+
+                current_page_number += 1
+
+                code_lines.append(f'# {"="*80}')
+                code_lines.append(f'# 🎯 PAGE {current_page_number} START: Popup Window ({page_var})')
+                code_lines.append(f'# {"="*80}')
+                code_lines.append('')
 
                 code_lines.append(f'# Открытие новой вкладки (popup)')
                 code_lines.append(f'{page_var} = wait_and_switch_to_popup(page, context,')
@@ -898,6 +924,13 @@ class PlaywrightParser:
                 max_opt = action.get('max_options', 100)
                 code_lines.append(f'# RANDOM_MARKER[{min_opt}-{max_opt}]')
                 code_lines.append('')
+
+        # 🔥 PAGE SECTION MARKER: Закрыть последнюю страницу
+        if page_started:
+            code_lines.append(f'# {"="*80}')
+            code_lines.append(f'# ✅ PAGE {current_page_number} END')
+            code_lines.append(f'# {"="*80}')
+            code_lines.append('')
 
         # === SMART BUTTON HANDLER ADDED ===
         # Трансформация теперь происходит на этапе генерации, пост-обработка не нужна

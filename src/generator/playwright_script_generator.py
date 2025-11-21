@@ -651,6 +651,95 @@ def safe_action(action_func, action_description: str, optional: bool = False, ti
             raise
 
 
+# ============================================================
+# 🔥 PAGE-LEVEL RETRY MECHANISM (FAULT TOLERANCE)
+# ============================================================
+
+def execute_page_with_retry(page_func, page_name: str, max_retries: int = 5, **kwargs):
+    """
+    🔥 ДИНАМИЧЕСКИЕ СТРАНИЦЫ С RETRY ЛОГИКОЙ
+
+    Выполняет действия на странице с автоматическим повтором при ошибках.
+    Если действие не удалось - пробует снова (до max_retries раз) с экспоненциальной задержкой.
+
+    Это решает проблемы:
+    - Элементы не успевают загрузиться
+    - Временные сетевые проблемы
+    - A/B тесты с разным порядком элементов
+    - Нестабильные pop-ups
+
+    Args:
+        page_func: Функция, выполняющая действия на странице
+        page_name: Название страницы для логов (например: "Page 0: Initial Form", "Page 1: Popup List")
+        max_retries: Максимальное количество попыток (по умолчанию 5)
+        **kwargs: Параметры для передачи в page_func
+
+    Returns:
+        bool: True если страница успешно выполнена, False если все попытки провалились
+
+    Example:
+        # Обернуть секцию страницы в retry
+        success = execute_page_with_retry(
+            page_func=lambda: execute_page_0_actions(page, data_row),
+            page_name="Page 0: Initial Form",
+            max_retries=5
+        )
+    """
+    import time
+
+    print("\\n" + "="*80)
+    print(f"[PAGE RETRY] 🎯 Начинаем выполнение: {page_name}")
+    print(f"[PAGE RETRY] Максимум попыток: {max_retries}")
+    print("="*80 + "\\n")
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            print(f"\\n{'─'*80}")
+            print(f"[PAGE RETRY] 🔄 Попытка {attempt}/{max_retries} для {page_name}")
+            print(f"{'─'*80}\\n")
+
+            # Выполнить действия на странице
+            result = page_func(**kwargs)
+
+            # Успех!
+            print("\\n" + "="*80)
+            print(f"[PAGE RETRY] ✅ УСПЕХ на попытке {attempt}/{max_retries}!")
+            print(f"[PAGE RETRY] {page_name} выполнена успешно")
+            print("="*80 + "\\n")
+            return True
+
+        except Exception as e:
+            error_type = type(e).__name__
+            error_msg = str(e)
+
+            print("\\n" + "─"*80)
+            print(f"[PAGE RETRY] ❌ ОШИБКА на попытке {attempt}/{max_retries}")
+            print(f"[PAGE RETRY] Тип: {error_type}")
+            print(f"[PAGE RETRY] Сообщение: {error_msg[:200]}")
+            print("─"*80 + "\\n")
+
+            # Если это последняя попытка - не ждем
+            if attempt >= max_retries:
+                print("="*80)
+                print(f"[PAGE RETRY] 🚫 ПРОВАЛ: Все {max_retries} попыток исчерпаны для {page_name}")
+                print(f"[PAGE RETRY] Последняя ошибка: {error_msg[:200]}")
+                print("="*80 + "\\n")
+                return False
+
+            # Экспоненциальная задержка: 2, 4, 8, 16, 32 секунды
+            wait_time = 2 ** attempt
+            print(f"[PAGE RETRY] ⏳ Ожидание {wait_time} секунд перед следующей попыткой...")
+            print(f"[PAGE RETRY] (Экспоненциальная задержка: 2^{attempt} = {wait_time}s)\\n")
+            time.sleep(wait_time)
+
+            # Дополнительная задержка для стабилизации страницы
+            print(f"[PAGE RETRY] 🔄 Подготовка к повторной попытке...")
+            time.sleep(2)
+
+    # Этот код не должен быть достигнут, но на всякий случай
+    return False
+
+
 '''
 
     def _generate_csv_loader(self, use_sms: bool = False) -> str:
