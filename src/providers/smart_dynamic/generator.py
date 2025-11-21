@@ -162,6 +162,14 @@ class Generator:
         if current_question and current_actions:
             questions_pool[current_question] = self._parse_actions(current_actions)
 
+        # DEBUG: вывод всех распарсенных вопросов
+        print(f"\n[PARSER] DEBUG: Найдено {len(questions_pool)} вопросов в user_code:")
+        for i, (q, data) in enumerate(list(questions_pool.items())[:10], 1):
+            actions_count = len(data.get('actions', []))
+            print(f"[PARSER]   {i}. '{q}' → {actions_count} действий")
+            if actions_count == 0:
+                print(f"[PARSER]      WARNING: НЕТ ДЕЙСТВИЙ! current_actions было: {len(current_actions) if current_actions else 0} строк")
+
         pre_questions_code = '\n'.join(pre_questions_lines)
         post_questions_code = '\n'.join(post_questions_lines)
 
@@ -177,8 +185,16 @@ class Generator:
         actions = []
         special_commands = []
 
+        # DEBUG
+        debug_enabled = False  # Включать только при отладке
+        if debug_enabled:
+            print(f"[PARSER] _parse_actions: получено {len(action_lines)} строк")
+
         for line in action_lines:
             stripped = line.strip()
+
+            if debug_enabled:
+                print(f"[PARSER]   Парсю: '{stripped[:80]}...'")  # Первые 80 символов
 
             # Специальные команды
             if stripped.startswith('#'):
