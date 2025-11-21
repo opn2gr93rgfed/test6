@@ -1496,86 +1496,86 @@ def load_csv_data() -> List[Dict]:
         if network_capture_patterns and len(network_capture_patterns) > 0:
             patterns_str = json.dumps(network_capture_patterns, ensure_ascii=False)
             network_capture_code = f'''
-    # ============================================================
-    # 🌐 ЗАХВАТ NETWORK RESPONSES (Developer Tools) + ИЗВЛЕЧЕНИЕ ПОЛЕЙ
-    # ============================================================
-    captured_data = {{}}
-    extracted_fields = {{}}  # Словарь для извлеченных полей: {{field_name: value}}
-    capture_patterns_config = {patterns_str}
+        # ============================================================
+        # 🌐 ЗАХВАТ NETWORK RESPONSES (Developer Tools) + ИЗВЛЕЧЕНИЕ ПОЛЕЙ
+        # ============================================================
+        captured_data = {{}}
+        extracted_fields = {{}}  # Словарь для извлеченных полей: {{field_name: value}}
+        capture_patterns_config = {patterns_str}
 
-    def get_nested_value(data, field_path):
-        """
-        Извлекает значение по пути field.subfield.subsubfield
-        Поддерживает массивы: field.array.0.subfield
-        """
-        keys = field_path.split('.')
-        value = data
-        for key in keys:
-            # Проверяем, является ли ключ числовым индексом для массива
-            if isinstance(value, list):
-                try:
-                    index = int(key)
-                    if 0 <= index < len(value):
-                        value = value[index]
-                    else:
-                        return None
-                except ValueError:
-                    return None
-            elif isinstance(value, dict) and key in value:
-                value = value[key]
-            else:
-                return None
-        return value
-
-    def handle_response(response):
-        """Обработчик network responses - перехватывает данные и извлекает указанные поля"""
-        try:
-            url = response.url
-            # Проверяем каждый паттерн из конфига
-            for pattern_config in capture_patterns_config:
-                pattern = pattern_config.get('pattern', '')
-                fields = pattern_config.get('fields', [])
-
-                if pattern.lower() in url.lower():
-                    print(f"[NETWORK_CAPTURE] Перехвачен ответ: {{url}}", flush=True)
+        def get_nested_value(data, field_path):
+            """
+            Извлекает значение по пути field.subfield.subsubfield
+            Поддерживает массивы: field.array.0.subfield
+            """
+            keys = field_path.split('.')
+            value = data
+            for key in keys:
+                # Проверяем, является ли ключ числовым индексом для массива
+                if isinstance(value, list):
                     try:
-                        # Получаем JSON данные из ответа
-                        json_data = response.json()
-
-                        # Сохраняем полные данные для отладки
-                        if pattern not in captured_data:
-                            captured_data[pattern] = []
-                        captured_data[pattern].append({{
-                            'url': url,
-                            'status': response.status,
-                            'data': json_data
-                        }})
-
-                        # 🔥 ИЗВЛЕЧЕНИЕ КОНКРЕТНЫХ ПОЛЕЙ
-                        if fields:
-                            print(f"[NETWORK_CAPTURE] Извлекаю поля: {{fields}}", flush=True)
-                            for field in fields:
-                                field_value = get_nested_value(json_data, field)
-                                if field_value is not None:
-                                    extracted_fields[field] = field_value
-                                    print(f"[NETWORK_CAPTURE]   {{field}} = {{field_value}}", flush=True)
-                                else:
-                                    print(f"[NETWORK_CAPTURE]   {{field}} не найдено в response", flush=True)
+                        index = int(key)
+                        if 0 <= index < len(value):
+                            value = value[index]
                         else:
-                            # Если полей нет - сохраняем весь response
-                            print(f"[NETWORK_CAPTURE] Полный response сохранен для '{{pattern}}'", flush=True)
-                            print(f"[NETWORK_CAPTURE] Preview: {{str(json_data)[:200]}}...", flush=True)
-                    except Exception as e:
-                        print(f"[NETWORK_CAPTURE] Не удалось распарсить JSON: {{e}}", flush=True)
-                    break
-        except Exception as e:
-            # Игнорируем ошибки при обработке - не должны ломать основной флоу
-            pass
+                            return None
+                    except ValueError:
+                        return None
+                elif isinstance(value, dict) and key in value:
+                    value = value[key]
+                else:
+                    return None
+            return value
 
-    # Регистрируем обработчик для всех network responses
-    page.on("response", handle_response)
-    print("[NETWORK_CAPTURE] Обработчик зарегистрирован", flush=True)
-    print(f"[NETWORK_CAPTURE] Паттерны и поля: {{capture_patterns_config}}", flush=True)
+        def handle_response(response):
+            """Обработчик network responses - перехватывает данные и извлекает указанные поля"""
+            try:
+                url = response.url
+                # Проверяем каждый паттерн из конфига
+                for pattern_config in capture_patterns_config:
+                    pattern = pattern_config.get('pattern', '')
+                    fields = pattern_config.get('fields', [])
+
+                    if pattern.lower() in url.lower():
+                        print(f"[NETWORK_CAPTURE] Перехвачен ответ: {{url}}", flush=True)
+                        try:
+                            # Получаем JSON данные из ответа
+                            json_data = response.json()
+
+                            # Сохраняем полные данные для отладки
+                            if pattern not in captured_data:
+                                captured_data[pattern] = []
+                            captured_data[pattern].append({{
+                                'url': url,
+                                'status': response.status,
+                                'data': json_data
+                            }})
+
+                            # 🔥 ИЗВЛЕЧЕНИЕ КОНКРЕТНЫХ ПОЛЕЙ
+                            if fields:
+                                print(f"[NETWORK_CAPTURE] Извлекаю поля: {{fields}}", flush=True)
+                                for field in fields:
+                                    field_value = get_nested_value(json_data, field)
+                                    if field_value is not None:
+                                        extracted_fields[field] = field_value
+                                        print(f"[NETWORK_CAPTURE]   {{field}} = {{field_value}}", flush=True)
+                                    else:
+                                        print(f"[NETWORK_CAPTURE]   {{field}} не найдено в response", flush=True)
+                            else:
+                                # Если полей нет - сохраняем весь response
+                                print(f"[NETWORK_CAPTURE] Полный response сохранен для '{{pattern}}'", flush=True)
+                                print(f"[NETWORK_CAPTURE] Preview: {{str(json_data)[:200]}}...", flush=True)
+                        except Exception as e:
+                            print(f"[NETWORK_CAPTURE] Не удалось распарсить JSON: {{e}}", flush=True)
+                        break
+            except Exception as e:
+                # Игнорируем ошибки при обработке - не должны ломать основной флоу
+                pass
+
+        # Регистрируем обработчик для всех network responses
+        page.on("response", handle_response)
+        print("[NETWORK_CAPTURE] Обработчик зарегистрирован", flush=True)
+        print(f"[NETWORK_CAPTURE] Паттерны и поля: {{capture_patterns_config}}", flush=True)
 '''
 
             # 🔥 ГЕНЕРАЦИЯ КОДА ДОБАВЛЕНИЯ В CSV
