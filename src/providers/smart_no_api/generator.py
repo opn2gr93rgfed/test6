@@ -892,11 +892,25 @@ def load_csv_data() -> List[Dict]:
                 i += 1
                 continue
 
-            # Skip empty lines and regular comments
-            if not stripped or stripped.startswith('#'):
+            # Skip empty lines
+            if not stripped:
                 wrapped_lines.append(line)
                 i += 1
                 continue
+
+            # Handle special command comments BEFORE treating as regular comments
+            if stripped.startswith('#'):
+                indent_str = ' ' * (len(line) - len(line.lstrip()))
+                command_handled = self._handle_special_command(stripped, indent_str, wrapped_lines, current_page_context)
+                if command_handled:
+                    # Special command was processed, continue to next line
+                    i += 1
+                    continue
+                else:
+                    # Regular comment, keep as is
+                    wrapped_lines.append(line)
+                    i += 1
+                    continue
 
             # Get current indentation
             indent = len(line) - len(line.lstrip())
