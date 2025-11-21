@@ -661,6 +661,30 @@ class ModernAppV3(ctk.CTk):
             text_color=self.theme['text_secondary']
         ).grid(row=3, column=2, padx=(5, 15), pady=10, sticky="w")
 
+        # Количество потоков
+        ctk.CTkLabel(
+            timeouts_frame,
+            text="Количество потоков:",
+            font=(ModernTheme.FONT['family'], 11),
+            text_color=self.theme['text_primary']
+        ).grid(row=4, column=0, padx=(15, 5), pady=10, sticky="w")
+
+        self.threads_count_var = tk.StringVar(value="1")
+        threads_count_entry = ctk.CTkEntry(
+            timeouts_frame,
+            textvariable=self.threads_count_var,
+            width=60,
+            font=(ModernTheme.FONT['family'], 11)
+        )
+        threads_count_entry.grid(row=4, column=1, padx=5, pady=10, sticky="ew")
+
+        ctk.CTkLabel(
+            timeouts_frame,
+            text="потоков (1-10, осторожно с нагрузкой)",
+            font=(ModernTheme.FONT['family'], 9),
+            text_color=self.theme['text_secondary']
+        ).grid(row=4, column=2, padx=(5, 15), pady=10, sticky="w")
+
         # ========== КНОПКИ ДЕЙСТВИЙ (АДАПТИВНЫЙ LAYOUT 2x3) ==========
         btn_frame = ctk.CTkFrame(tab, fg_color="transparent")
         btn_frame.grid(row=4, column=0, sticky="ew", padx=24, pady=(8, 24))
@@ -1029,13 +1053,16 @@ class ModernAppV3(ctk.CTk):
                 'target': 'library',  # По умолчанию library mode
                 'use_proxy': self.config.get('proxy', {}).get('enabled', False),
                 'proxy': self.config.get('proxy', {}),
+                'proxy_list': self.config.get('proxy_list', {}),  # 🔥 СПИСОК ПРОКСИ ДЛЯ РОТАЦИИ
                 'use_sms': False,  # Пока отключено
                 'sms': self.config.get('sms', {}),
                 # 🔥 ДОБАВЛЯЕМ НАСТРОЙКИ ПРОФИЛЯ
                 'profile': profile_config,
                 # 🔥 СИМУЛЯЦИЯ ВВОДА ТЕКСТА
                 'simulate_typing': self.simulate_typing_var.get(),
-                'typing_delay': int(self.typing_delay_var.get()) if self.typing_delay_var.get().isdigit() else 100
+                'typing_delay': int(self.typing_delay_var.get()) if self.typing_delay_var.get().isdigit() else 100,
+                # 🔥 МНОГОПОТОЧНОСТЬ
+                'threads_count': int(self.threads_count_var.get()) if self.threads_count_var.get().isdigit() else 1
             }
 
             print(f"[DEBUG] API Token: {config['api_token'][:10]}..." if config['api_token'] else "[DEBUG] API Token: пуст")  # DEBUG
@@ -1235,6 +1262,16 @@ class ModernAppV3(ctk.CTk):
             if not rows:
                 self.toast.warning("⚠️ CSV файл пуст")
                 return
+
+            # Обработка пустых значений - заменить None и пустые значения на пустые строки
+            # Это критично для json.dumps в генераторе, который не работает с None
+            for row in rows:
+                for key in row:
+                    if row[key] is None or row[key] == '':
+                        row[key] = ''
+                    else:
+                        # Конвертировать все значения в строки
+                        row[key] = str(row[key]).strip()
 
             # Сохраняем данные
             self.csv_data_rows = rows

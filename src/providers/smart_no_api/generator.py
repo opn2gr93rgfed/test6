@@ -13,33 +13,34 @@ class Generator:
 
     def generate_script(self, user_code: str, config: Dict) -> str:
         """
-        Генерирует Playwright скрипт с Octobrowser API + прокси
+        Генерирует Playwright скрипт с Octobrowser API + прокси + многопоточность
 
         Args:
             user_code: Код автоматизации из Playwright recorder
-            config: Конфигурация (API token, proxy, profile settings)
+            config: Конфигурация (API token, proxy, profile settings, threads_count, proxy_list)
 
         Returns:
             Полный исполняемый Python скрипт
         """
         api_token = config.get('api_token', '')
-        csv_filename = config.get('csv_filename', 'data.csv')
-        csv_data = config.get('csv_data', None)
-        csv_embed_mode = config.get('csv_embed_mode', True)
         proxy_config = config.get('proxy', {})
+        proxy_list_config = config.get('proxy_list', {})  # 🔥 СПИСОК ПРОКСИ
         profile_config = config.get('profile', {})
+        threads_count = config.get('threads_count', 1)  # 🔥 МНОГОПОТОЧНОСТЬ
 
         # 🔥 СИМУЛЯЦИЯ ВВОДА ТЕКСТА
         self.simulate_typing = config.get('simulate_typing', True)
         self.typing_delay = config.get('typing_delay', 100)
 
         script = self._generate_imports()
-        script += self._generate_config(api_token, csv_filename, csv_data, csv_embed_mode, proxy_config)
-        script += self._generate_octobrowser_functions(profile_config, proxy_config)
+        script += self._generate_config(api_token, proxy_config, proxy_list_config, threads_count)
+        script += self._generate_proxy_rotation()  # 🔥 ФУНКЦИЯ РОТАЦИИ ПРОКСИ
+        script += self._generate_octobrowser_functions(profile_config)  # Убрал proxy_config - теперь прокси выбирается динамически
         script += self._generate_helpers()
         script += self._generate_csv_loader()
         script += self._generate_main_iteration(user_code)
-        script += self._generate_main_function()
+        script += self._generate_worker_function()  # 🔥 WORKER ФУНКЦИЯ ДЛЯ ПОТОКОВ
+        script += self._generate_main_function()  # 🔥 ОБНОВЛЕННАЯ MAIN С МНОГОПОТОЧНОСТЬЮ
 
         return script
 
@@ -48,19 +49,24 @@ class Generator:
 # -*- coding: utf-8 -*-
 """
 Автоматически сгенерированный скрипт
-Provider: smart_no_api (OCTOBROWSER API + PROXY + FALLBACKS)
+Provider: smart_no_api (OCTOBROWSER API + PROXY + FALLBACKS + MULTITHREADING)
 """
 
 import csv
 import time
 import requests
+import threading
+import random
+import re
+import os
+from tkinter import Tk, filedialog
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from playwright.sync_api import sync_playwright, expect, TimeoutError as PlaywrightTimeout
 from typing import Dict, List, Optional
 
 '''
 
-    def _generate_config(self, api_token: str, csv_filename: str, csv_data: List[Dict],
-                         csv_embed_mode: bool, proxy_config: Dict) -> str:
+    def _generate_config(self, api_token: str, proxy_config: Dict, proxy_list_config: Dict, threads_count: int) -> str:
         config = f'''# ============================================================
 # КОНФИГУРАЦИЯ
 # ============================================================
@@ -72,27 +78,35 @@ LOCAL_API_URL = "http://localhost:58888/api"
 
 '''
 
-        if csv_embed_mode and csv_data:
-            config += f'''# CSV данные (встроены в скрипт)
-CSV_EMBED_MODE = True
-CSV_DATA = {json.dumps(csv_data, ensure_ascii=False, indent=2)}
+        # 🔥 МНОГОПОТОЧНОСТЬ
+        config += f'''# Многопоточность
+THREADS_COUNT = {threads_count}  # Количество параллельных потоков
+
+'''
+
+        # 🔥 ПРОКСИ КОНФИГУРАЦИЯ
+        proxies_list = proxy_list_config.get('proxies', [])
+        rotation_mode = proxy_list_config.get('rotation_mode', 'random')
+        use_proxy_list = len(proxies_list) > 0
+
+        if use_proxy_list:
+            # Используем список прокси с ротацией
+            config += f'''# Прокси список с ротацией
+USE_PROXY_LIST = True
+PROXY_LIST = {json.dumps(proxies_list, ensure_ascii=False, indent=2)}
+PROXY_ROTATION_MODE = "{rotation_mode}"  # random, round-robin, sticky
 
 '''
         else:
-            config += f'''# CSV файл
-CSV_EMBED_MODE = False
-CSV_FILENAME = "{csv_filename}"
-
-'''
-
-        # Прокси конфигурация
-        proxy_enabled = proxy_config.get('enabled', False)
-        config += f'''# Прокси настройки (ОБЯЗАТЕЛЬНО)
+            # Используем одиночный прокси (старый формат)
+            proxy_enabled = proxy_config.get('enabled', False)
+            config += f'''# Прокси (одиночный)
+USE_PROXY_LIST = False
 USE_PROXY = {proxy_enabled}
 '''
 
-        if proxy_enabled:
-            config += f'''PROXY_TYPE = "{proxy_config.get('type', 'http')}"
+            if proxy_enabled:
+                config += f'''PROXY_TYPE = "{proxy_config.get('type', 'http')}"
 PROXY_HOST = "{proxy_config.get('host', '')}"
 PROXY_PORT = "{proxy_config.get('port', '')}"
 PROXY_LOGIN = "{proxy_config.get('login', '')}"
@@ -104,11 +118,155 @@ PROXY_PASSWORD = "{proxy_config.get('password', '')}"
 DEFAULT_TIMEOUT = 10000  # 10 секунд (было 30s, уменьшено для быстрых фейлов)
 NAVIGATION_TIMEOUT = 60000  # 60 секунд
 
+# Thread-safe счетчик для round-robin
+_proxy_counter = 0
+_proxy_lock = threading.Lock()
+
 '''
         return config
 
-    def _generate_octobrowser_functions(self, profile_config: Dict, proxy_config: Dict) -> str:
-        """Генерирует функции Octobrowser API с поддержкой прокси"""
+    def _generate_proxy_rotation(self) -> str:
+        """Генерирует функции ротации прокси"""
+        return '''# ============================================================
+# ПРОКСИ РОТАЦИЯ
+# ============================================================
+
+def parse_proxy_string(proxy_string: str) -> Optional[Dict]:
+    """
+    Парсинг прокси строки в компоненты
+
+    Форматы:
+    - type://login:password@host:port
+    - type://host:port
+    - host:port (по умолчанию http)
+    - host:port:login:password
+
+    Returns:
+        Dict с полями: type, host, port, login, password
+    """
+    try:
+        proxy_string = proxy_string.strip()
+
+        # type://login:password@host:port
+        match = re.match(r'^(https?|socks5)://([^:]+):([^@]+)@([^:]+):(\d+)$', proxy_string)
+        if match:
+            return {
+                'type': match.group(1),
+                'login': match.group(2),
+                'password': match.group(3),
+                'host': match.group(4),
+                'port': match.group(5)
+            }
+
+        # type://host:port
+        match = re.match(r'^(https?|socks5)://([^:]+):(\d+)$', proxy_string)
+        if match:
+            return {
+                'type': match.group(1),
+                'host': match.group(2),
+                'port': match.group(3),
+                'login': '',
+                'password': ''
+            }
+
+        # host:port:login:password
+        match = re.match(r'^([^:]+):(\d+):([^:]+):([^:]+)$', proxy_string)
+        if match:
+            return {
+                'type': 'http',
+                'host': match.group(1),
+                'port': match.group(2),
+                'login': match.group(3),
+                'password': match.group(4)
+            }
+
+        # host:port (без типа)
+        match = re.match(r'^([^:]+):(\d+)$', proxy_string)
+        if match:
+            return {
+                'type': 'http',
+                'host': match.group(1),
+                'port': match.group(2),
+                'login': '',
+                'password': ''
+            }
+
+        print(f"[PROXY] [WARNING] Не удалось распарсить: {proxy_string}")
+        return None
+
+    except Exception as e:
+        print(f"[PROXY] [ERROR] Ошибка парсинга: {e}")
+        return None
+
+
+def get_proxy_for_thread(thread_id: int, iteration_number: int) -> Optional[Dict]:
+    """
+    Получить прокси для потока согласно режиму ротации
+
+    Args:
+        thread_id: ID потока
+        iteration_number: Номер итерации
+
+    Returns:
+        Dict с прокси или None
+    """
+    global _proxy_counter
+
+    if not USE_PROXY_LIST:
+        # Используем одиночный прокси (старый формат)
+        if not USE_PROXY:
+            return None
+        return {
+            'type': PROXY_TYPE,
+            'host': PROXY_HOST,
+            'port': PROXY_PORT,
+            'login': PROXY_LOGIN,
+            'password': PROXY_PASSWORD
+        }
+
+    if not PROXY_LIST or len(PROXY_LIST) == 0:
+        print("[PROXY] [WARNING] Список прокси пуст!")
+        return None
+
+    proxy_string = None
+
+    if PROXY_ROTATION_MODE == 'random':
+        # Random: случайный прокси для каждой итерации
+        proxy_string = random.choice(PROXY_LIST)
+        print(f"[PROXY] [RANDOM] Thread {thread_id}, Iteration {iteration_number}: выбран случайный прокси")
+
+    elif PROXY_ROTATION_MODE == 'round-robin':
+        # Round-robin: последовательная ротация (thread-safe)
+        with _proxy_lock:
+            index = _proxy_counter % len(PROXY_LIST)
+            proxy_string = PROXY_LIST[index]
+            _proxy_counter += 1
+        print(f"[PROXY] [ROUND-ROBIN] Thread {thread_id}, Iteration {iteration_number}: прокси #{index + 1}/{len(PROXY_LIST)}")
+
+    elif PROXY_ROTATION_MODE == 'sticky':
+        # Sticky: каждый поток использует свой прокси
+        index = thread_id % len(PROXY_LIST)
+        proxy_string = PROXY_LIST[index]
+        print(f"[PROXY] [STICKY] Thread {thread_id}: закреплен за прокси #{index + 1}")
+
+    else:
+        print(f"[PROXY] [ERROR] Неизвестный режим ротации: {PROXY_ROTATION_MODE}")
+        proxy_string = PROXY_LIST[0]
+
+    # Парсинг прокси строки
+    proxy_dict = parse_proxy_string(proxy_string)
+    if proxy_dict:
+        print(f"[PROXY] [OK] {proxy_dict['type']}://{proxy_dict['host']}:{proxy_dict['port']}")
+    else:
+        print(f"[PROXY] [ERROR] Не удалось распарсить прокси: {proxy_string}")
+
+    return proxy_dict
+
+
+'''
+
+    def _generate_octobrowser_functions(self, profile_config: Dict) -> str:
+        """Генерирует функции Octobrowser API с поддержкой динамических прокси"""
         if not profile_config:
             profile_config = {}
 
@@ -124,8 +282,14 @@ NAVIGATION_TIMEOUT = 60000  # 60 секунд
 # OCTOBROWSER API ФУНКЦИИ
 # ============================================================
 
-def create_profile(title: str = "Auto Profile") -> Optional[str]:
-    """Создать профиль через Octobrowser API с прокси"""
+def create_profile(title: str = "Auto Profile", proxy_dict: Optional[Dict] = None) -> Optional[str]:
+    """
+    Создать профиль через Octobrowser API с прокси
+
+    Args:
+        title: Название профиля
+        proxy_dict: Dict с прокси параметрами (type, host, port, login, password)
+    """
     url = f"{{API_BASE_URL}}/profiles"
     headers = {{"X-Octo-Api-Token": API_TOKEN}}
 
@@ -135,16 +299,16 @@ def create_profile(title: str = "Auto Profile") -> Optional[str]:
         "tags": {tags_json}
     }}
 
-    # Добавление прокси если включено
-    if USE_PROXY:
+    # Добавление прокси если передан
+    if proxy_dict:
         profile_data["proxy"] = {{
-            "type": PROXY_TYPE,
-            "host": PROXY_HOST,
-            "port": PROXY_PORT,
-            "login": PROXY_LOGIN,
-            "password": PROXY_PASSWORD
+            "type": proxy_dict.get('type', 'http'),
+            "host": proxy_dict['host'],
+            "port": proxy_dict['port'],
+            "login": proxy_dict.get('login', ''),
+            "password": proxy_dict.get('password', '')
         }}
-        print(f"[PROFILE] [!] ПРОКСИ ОБЯЗАТЕЛЕН: {{PROXY_TYPE}}://{{PROXY_HOST}}:{{PROXY_PORT}}")
+        print(f"[PROFILE] [!] ПРОКСИ: {{proxy_dict['type']}}://{{proxy_dict['host']}}:{{proxy_dict['port']}}")
 
     if {geolocation_json}:
         profile_data['geolocation'] = {geolocation_json}
@@ -500,18 +664,64 @@ def wait_for_navigation(page, timeout=30000):
 # ============================================================
 
 def load_csv_data() -> List[Dict]:
-    """Загрузить данные из CSV"""
-    if CSV_EMBED_MODE:
-        return CSV_DATA
-    else:
-        data = []
-        try:
-            with open(CSV_FILENAME, 'r', encoding='utf-8') as f:
-                reader = csv.DictReader(f)
-                data = list(reader)
-        except Exception as e:
-            print(f"[ERROR] Load CSV: {e}")
-        return data
+    """
+    Загрузить данные из CSV файла через диалог выбора файла
+
+    Открывает окно выбора файла, позволяя выбрать CSV файл из любой папки.
+    Файл должен иметь заголовки (первая строка).
+    """
+    print("[CSV] Выберите CSV файл с данными...")
+
+    # Создать скрытое окно Tkinter для диалога
+    root = Tk()
+    root.withdraw()  # Скрыть главное окно
+    root.attributes('-topmost', True)  # Поверх всех окон
+
+    # Открыть диалог выбора файла
+    csv_file_path = filedialog.askopenfilename(
+        title="Выберите CSV файл с данными",
+        filetypes=[
+            ("CSV файлы", "*.csv"),
+            ("Все файлы", "*.*")
+        ],
+        initialdir=os.path.expanduser("~")  # Начать с домашней папки
+    )
+
+    root.destroy()  # Уничтожить окно Tkinter
+
+    # Проверить что файл был выбран
+    if not csv_file_path:
+        print("[CSV] [ERROR] Файл не выбран. Выход.")
+        return []
+
+    # Проверить что файл существует
+    if not os.path.exists(csv_file_path):
+        print(f"[CSV] [ERROR] Файл не существует: {csv_file_path}")
+        return []
+
+    print(f"[CSV] Загрузка файла: {csv_file_path}")
+
+    # Загрузить CSV
+    data = []
+    try:
+        with open(csv_file_path, 'r', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            data = list(reader)
+
+        print(f"[CSV] [OK] Загружено {len(data)} строк")
+
+        # Показать заголовки
+        if data and len(data) > 0:
+            headers = list(data[0].keys())
+            print(f"[CSV] Заголовки: {', '.join(headers)}")
+
+    except Exception as e:
+        print(f"[CSV] [ERROR] Ошибка загрузки CSV: {e}")
+        import traceback
+        traceback.print_exc()
+        return []
+
+    return data
 
 
 '''
@@ -550,9 +760,22 @@ def load_csv_data() -> List[Dict]:
         for line in lines:
             stripped = line.strip()
 
-            # Skip empty lines and comments at start
-            if not stripped or stripped.startswith('#'):
+            # Skip empty lines
+            if not stripped:
                 continue
+
+            # Check if comment is a special command - if yes, keep it
+            if stripped.startswith('#'):
+                comment_lower = stripped.lower()
+                # Special commands that should be preserved
+                is_special_command = (
+                    re.match(r'#\s*pause\s*\d+', comment_lower) or  # #pause10
+                    comment_lower in ['#scrolldown', '#scroll', '#scrollup', '#scrollmid', '#toggle_switches', '#optional']
+                )
+                if not is_special_command:
+                    # Skip regular comments
+                    continue
+                # If it's a special command, DON'T continue - let it be processed through indentation handling below
 
             # Skip imports
             if stripped.startswith('import ') or stripped.startswith('from '):
@@ -690,18 +913,62 @@ def load_csv_data() -> List[Dict]:
             line = lines[i]
             stripped = line.strip()
 
+            # Check for inline special commands (e.g., "page.fill(...)  #pause10")
+            inline_command = None
+            if '#' in stripped and not stripped.startswith('#'):
+                # Split code and comment
+                code_part, _, comment_part = stripped.partition('#')
+                code_part = code_part.strip()
+                comment_part = '#' + comment_part.strip()
+
+                # Check if comment is a special command
+                if self._is_special_command(comment_part):
+                    inline_command = comment_part
+                    stripped = code_part  # Continue processing with code only
+                    # Recreate line with proper indentation
+                    indent = len(line) - len(line.lstrip())
+                    line = ' ' * indent + code_part
+
             # Check for #optional marker
             if stripped.lower() == '#optional':
                 next_action_optional = True
-                wrapped_lines.append(f"{' ' * (len(line) - len(line.lstrip()))}# Next action is optional (will not fail script if element not found)")
+                # Calculate correct indentation (accounting for 'with' blocks)
+                indent = len(line) - len(line.lstrip())
+                if inside_with_block and indent <= with_block_indent:
+                    indent = with_block_indent + 4
+                indent_str = ' ' * indent
+                wrapped_lines.append(f"{indent_str}# Next action is optional (will not fail script if element not found)")
                 i += 1
                 continue
 
-            # Skip empty lines and regular comments
-            if not stripped or stripped.startswith('#'):
+            # Skip empty lines
+            if not stripped:
                 wrapped_lines.append(line)
                 i += 1
                 continue
+
+            # Handle special command comments BEFORE treating as regular comments
+            if stripped.startswith('#'):
+                # Calculate correct indentation (accounting for 'with' blocks)
+                indent = len(line) - len(line.lstrip())
+
+                # FIX: Apply same indentation fix as for regular actions
+                # If we're inside a with block and line has wrong indent, fix it
+                if inside_with_block and indent <= with_block_indent:
+                    # Line inside with block should have at least with_block_indent + 4
+                    indent = with_block_indent + 4
+
+                indent_str = ' ' * indent
+                command_handled = self._handle_special_command(stripped, indent_str, wrapped_lines, current_page_context)
+                if command_handled:
+                    # Special command was processed, continue to next line
+                    i += 1
+                    continue
+                else:
+                    # Regular comment, keep as is (with potentially fixed indent)
+                    wrapped_lines.append(indent_str + stripped)
+                    i += 1
+                    continue
 
             # Get current indentation
             indent = len(line) - len(line.lstrip())
@@ -750,17 +1017,6 @@ def load_csv_data() -> List[Dict]:
                 'page3.',
             ])
 
-            # Actions inside 'with' blocks are critical (must succeed to open popup/navigate)
-            # BUT: if #optional marker was set, respect it even inside with blocks
-            if inside_with_block and indent > with_block_indent and not next_action_optional:
-                is_critical = True
-
-            # If #optional marker was set, force this action to be non-critical
-            # This check MUST come AFTER with-block check to override it
-            if next_action_optional:
-                is_critical = False
-                next_action_optional = False  # Reset marker
-
             # Check if this is a resilient action (click, fill, etc.)
             is_action = any(pattern in stripped for pattern in [
                 '.click(',
@@ -772,6 +1028,17 @@ def load_csv_data() -> List[Dict]:
                 '.press(',
                 '.type(',
             ])
+
+            # Actions inside 'with' blocks are critical (must succeed to open popup/navigate)
+            # BUT: if #optional marker was set, respect it even inside with blocks
+            if inside_with_block and indent > with_block_indent and not next_action_optional:
+                is_critical = True
+
+            # If #optional marker was set, force this action to be non-critical
+            # This check MUST come AFTER with-block check to override it
+            if next_action_optional and is_action:
+                is_critical = False
+                next_action_optional = False  # Reset marker ONLY after processing an action
 
             # Check if this is a popup page action (page1/page2/page3) that needs retry logic
             is_popup_action = is_action and any(f'page{n}.' in stripped for n in [1, 2, 3])
@@ -911,16 +1178,56 @@ def load_csv_data() -> List[Dict]:
                         wrapped_lines.append(f"{indent_str}    pass")
                         wrapped_lines.append(f'{indent_str}print(f"[POPUP] [OK] {page_var} page loaded - use #scrolldown/#scrollmid for manual scroll control", flush=True)')
 
+            # Process inline special command if found
+            if inline_command:
+                indent_str = ' ' * (len(line) - len(line.lstrip()))
+                command_handled = self._handle_special_command(inline_command, indent_str, wrapped_lines, current_page_context)
+                if not command_handled:
+                    print(f"[GENERATOR] [WARNING] Inline command not recognized: {inline_command}")
+
             i += 1
 
         return '\n'.join(wrapped_lines)
+
+    def _is_special_command(self, comment: str) -> bool:
+        """
+        Проверить, является ли комментарий специальной командой
+
+        Args:
+            comment: Комментарий для проверки
+
+        Returns:
+            True если это специальная команда, False если обычный комментарий
+        """
+        import re
+        comment_lower = comment.lower().strip()
+
+        # Check for pause command
+        if re.match(r'#\s*pause\s*\d+', comment_lower):
+            return True
+
+        # Check for other special commands
+        special_commands = [
+            '#toggle_switches',
+            '#optional',
+            '#scrolldown',
+            '#scroll',
+            '#scrollup',
+            '#scrollmid'
+        ]
+
+        for cmd in special_commands:
+            if comment_lower == cmd or comment_lower.replace(' ', '') == cmd:
+                return True
+
+        return False
 
     def _handle_special_command(self, comment: str, indent_str: str, wrapped_lines: list, page_context: str = 'page') -> bool:
         """
         Обработать специальные команды в комментариях
 
         Поддерживаемые команды:
-        - #pause5, #pause10, #pause20 - пауза N секунд
+        - #pause5, #pause10, #pause20 - пауза N секунд (любое число)
         - #scrolldown, #scroll - скролл вниз до конца страницы
         - #scrollup - скролл вверх к началу страницы
         - #scrollmid - скролл к середине страницы
@@ -937,14 +1244,14 @@ def load_csv_data() -> List[Dict]:
 
         comment_lower = comment.lower().strip()
 
-        # #pause5, #pause10, #pause20 - пауза N секунд
-        pause_match = re.match(r'#pause(\d+)', comment_lower)
+        # #pause5, #pause10, #pause20 - пауза N секунд (поддерживает пробелы: "# pause10")
+        pause_match = re.match(r'#\s*pause\s*(\d+)', comment_lower)
         if pause_match:
             seconds = pause_match.group(1)
             wrapped_lines.append(f"{indent_str}# User command: pause {seconds} seconds")
-            wrapped_lines.append(f"{indent_str}print(f'[PAUSE] Waiting {seconds} seconds...')")
+            wrapped_lines.append(f"{indent_str}print(f'[PAUSE] Waiting {seconds} seconds...', flush=True)")
             wrapped_lines.append(f"{indent_str}time.sleep({seconds})")
-            wrapped_lines.append(f"{indent_str}print(f'[PAUSE] Resume')")
+            wrapped_lines.append(f"{indent_str}print(f'[PAUSE] Resume', flush=True)")
             return True
 
         # #toggle_switches - переключить switches (первый checked -> uncheck, первый unchecked -> check)
@@ -1094,18 +1401,133 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
 
 '''
 
+    def _generate_worker_function(self) -> str:
+        """Генерирует worker функцию для обработки одной задачи в потоке"""
+        return '''# ============================================================
+# WORKER ФУНКЦИЯ (для многопоточности)
+# ============================================================
+
+def process_task(task_data: tuple) -> Dict:
+    """
+    Обработать одну задачу (итерацию) в отдельном потоке
+
+    Args:
+        task_data: Tuple (thread_id, iteration_number, data_row, total_count)
+
+    Returns:
+        Dict с результатом выполнения
+    """
+    thread_id, iteration_number, data_row, total_count = task_data
+
+    print(f"\\n{'#'*60}")
+    print(f"# THREAD {thread_id} | ROW {iteration_number}/{total_count}")
+    print(f"{'#'*60}")
+
+    profile_uuid = None
+    result = {
+        'thread_id': thread_id,
+        'iteration': iteration_number,
+        'success': False,
+        'error': None
+    }
+
+    try:
+        # 🔥 ПОЛУЧИТЬ ПРОКСИ ДЛЯ ПОТОКА
+        proxy_dict = get_proxy_for_thread(thread_id, iteration_number)
+
+        # Создание профиля через API
+        profile_title = f"Auto Profile T{thread_id} #{iteration_number}"
+        print(f"[THREAD {thread_id}] Создание профиля: {profile_title}")
+        profile_uuid = create_profile(profile_title, proxy_dict)
+
+        if not profile_uuid:
+            print(f"[THREAD {thread_id}] [ERROR] Не удалось создать профиль")
+            result['error'] = "Profile creation failed"
+            return result
+
+        print(f"[THREAD {thread_id}] UUID: {profile_uuid}")
+
+        # Ожидание синхронизации профиля с локальным Octobrowser
+        print(f"[THREAD {thread_id}] Ожидание синхронизации (5 сек)...")
+        time.sleep(5)
+
+        # Запуск профиля
+        print(f"[THREAD {thread_id}] Запуск профиля...")
+        start_data = start_profile(profile_uuid)
+
+        if not start_data:
+            print(f"[THREAD {thread_id}] [ERROR] Не удалось запустить профиль")
+            result['error'] = "Profile start failed"
+            return result
+
+        debug_url = start_data.get('ws_endpoint')
+        if not debug_url:
+            print(f"[THREAD {thread_id}] [ERROR] Нет CDP endpoint")
+            result['error'] = "No CDP endpoint"
+            return result
+
+        print(f"[THREAD {thread_id}] [OK] CDP endpoint получен")
+
+        # Подключение через Playwright CDP
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.connect_over_cdp(debug_url)
+            context = browser.contexts[0]
+            page = context.pages[0]
+
+            page.set_default_timeout(DEFAULT_TIMEOUT)
+            page.set_default_navigation_timeout(NAVIGATION_TIMEOUT)
+
+            # Запуск итерации
+            iteration_result = run_iteration(page, data_row, iteration_number)
+
+            if iteration_result:
+                result['success'] = True
+            else:
+                result['error'] = "Iteration failed"
+
+            # Пауза перед закрытием
+            time.sleep(2)
+
+            browser.close()
+
+        print(f"[THREAD {thread_id}] Остановка профиля")
+        stop_profile(profile_uuid)
+
+    except Exception as e:
+        print(f"[THREAD {thread_id}] [ERROR] Критическая ошибка: {e}")
+        import traceback
+        traceback.print_exc()
+        result['error'] = str(e)
+
+    finally:
+        if profile_uuid:
+            time.sleep(1)
+
+    return result
+
+
+'''
+
     def _generate_main_function(self) -> str:
         return '''# ============================================================
-# ГЛАВНАЯ ФУНКЦИЯ
+# ГЛАВНАЯ ФУНКЦИЯ (с многопоточностью)
 # ============================================================
 
 def main():
-    """Главная функция запуска через Octobrowser API"""
+    """Главная функция запуска через Octobrowser API с многопоточностью"""
     print("[MAIN] Запуск автоматизации через Octobrowser API...")
     print(f"[MAIN] API Token: {API_TOKEN[:10]}..." if API_TOKEN else "[MAIN] [!] API Token отсутствует!")
+    print(f"[MAIN] Потоков: {THREADS_COUNT}")
 
-    if USE_PROXY:
-        print(f"[MAIN] [OK] ПРОКСИ ВКЛЮЧЕН: {PROXY_TYPE}://{PROXY_HOST}:{PROXY_PORT}")
+    # Прокси информация
+    if USE_PROXY_LIST:
+        print(f"[MAIN] ПРОКСИ: {len(PROXY_LIST)} прокси, режим ротации: {PROXY_ROTATION_MODE}")
+        for i, proxy in enumerate(PROXY_LIST, 1):
+            proxy_dict = parse_proxy_string(proxy)
+            if proxy_dict:
+                print(f"[MAIN]    {i}. {proxy_dict['type']}://{proxy_dict['host']}:{proxy_dict['port']}")
+    elif USE_PROXY:
+        print(f"[MAIN] ПРОКСИ (одиночный): {PROXY_TYPE}://{PROXY_HOST}:{PROXY_PORT}")
     else:
         print("[MAIN] [!] ПРОКСИ НЕ ВКЛЮЧЕН!")
 
@@ -1123,102 +1545,59 @@ def main():
         print("[ERROR] Нет данных для обработки")
         return
 
-    # Обработка каждой строки
+    # Подготовка задач для потоков
+    tasks = []
+    for iteration_number, data_row in enumerate(csv_data, 1):
+        # thread_id будет назначен при выполнении
+        # Пока используем номер итерации как ID
+        thread_id = (iteration_number - 1) % THREADS_COUNT + 1
+        task_data = (thread_id, iteration_number, data_row, len(csv_data))
+        tasks.append(task_data)
+
+    # Ограничить количество потоков количеством задач
+    actual_threads = min(THREADS_COUNT, len(csv_data))
+    print(f"\\n[MAIN] Запуск {len(tasks)} задач в {actual_threads} потоках...")
+    if actual_threads < THREADS_COUNT:
+        print(f"[MAIN] [INFO] Потоков ограничено до {actual_threads} (количество строк CSV)")
+    print(f"[MAIN] {'='*60}")
+
+    # Запуск многопоточной обработки
     success_count = 0
     fail_count = 0
+    results = []
 
-    for iteration_number, data_row in enumerate(csv_data, 1):
-        print(f"\\n{'#'*60}")
-        print(f"# ROW {iteration_number}/{len(csv_data)}")
-        print(f"{'#'*60}")
+    with ThreadPoolExecutor(max_workers=actual_threads) as executor:
+        # Отправить все задачи в пул
+        future_to_task = {executor.submit(process_task, task): task for task in tasks}
 
-        # Задержка между итерациями для предотвращения перегрузки API
-        if iteration_number > 1:
-            wait_time = 2
-            print(f"[API] Задержка {wait_time}s перед созданием следующего профиля...")
-            time.sleep(wait_time)
+        # Обработка результатов по мере завершения
+        for future in as_completed(future_to_task):
+            task_data = future_to_task[future]
+            try:
+                result = future.result()
+                results.append(result)
 
-        profile_uuid = None
-
-        try:
-            # Создание профиля через API
-            profile_title = f"Auto Profile {iteration_number}"
-            print(f"[PROFILE] Создание профиля: {profile_title}")
-            profile_uuid = create_profile(profile_title)
-
-            if not profile_uuid:
-                print("[ERROR] Не удалось создать профиль")
-                fail_count += 1
-                continue
-
-            print(f"[PROFILE] UUID: {profile_uuid}")
-
-            # Ожидание синхронизации профиля с локальным Octobrowser
-            print("[PROFILE] Ожидание синхронизации с локальным Octobrowser (5 сек)...")
-            time.sleep(5)
-
-            # Запуск профиля
-            print("[PROFILE] Запуск...")
-            start_data = start_profile(profile_uuid)
-
-            if not start_data:
-                print("[ERROR] Не удалось запустить профиль")
-                fail_count += 1
-                continue
-
-            debug_url = start_data.get('ws_endpoint')
-            if not debug_url:
-                print("[ERROR] Нет CDP endpoint")
-                fail_count += 1
-                continue
-
-            print(f"[PROFILE] [OK] CDP endpoint получен")
-
-            # Подключение через Playwright CDP
-            with sync_playwright() as playwright:
-                browser = playwright.chromium.connect_over_cdp(debug_url)
-                context = browser.contexts[0]
-                page = context.pages[0]
-
-                page.set_default_timeout(DEFAULT_TIMEOUT)
-                page.set_default_navigation_timeout(NAVIGATION_TIMEOUT)
-
-                # Запуск итерации
-                result = run_iteration(page, data_row, iteration_number)
-
-                if result:
+                if result['success']:
                     success_count += 1
+                    print(f"[MAIN] [OK] Итерация {result['iteration']} завершена успешно")
                 else:
                     fail_count += 1
+                    print(f"[MAIN] [ERROR] Итерация {result['iteration']} завершена с ошибкой: {result.get('error', 'Unknown')}")
 
-                # Пауза перед закрытием
-                time.sleep(2)
-
-                browser.close()
-
-            print(f"[PROFILE] Остановка профиля")
-            stop_profile(profile_uuid)
-
-        except Exception as e:
-            print(f"[ERROR] Критическая ошибка в итерации {iteration_number}: {e}")
-            import traceback
-            traceback.print_exc()
-            fail_count += 1
-
-        finally:
-            if profile_uuid:
-                time.sleep(1)
-
-        # Пауза между итерациями
-        if iteration_number < len(csv_data):
-            print(f"[MAIN] Пауза 3 секунды перед следующей итерацией...")
-            time.sleep(3)
+            except Exception as e:
+                fail_count += 1
+                print(f"[MAIN] [ERROR] Ошибка выполнения задачи: {e}")
+                import traceback
+                traceback.print_exc()
 
     # Итоговая статистика
     print(f"\\n{'='*60}")
     print(f"[MAIN] ЗАВЕРШЕНО")
     print(f"[MAIN] Успешно: {success_count}/{len(csv_data)}")
     print(f"[MAIN] Ошибок: {fail_count}/{len(csv_data)}")
+    print(f"[MAIN] Использовано потоков: {actual_threads}/{THREADS_COUNT}")
+    if USE_PROXY_LIST:
+        print(f"[MAIN] Использовано прокси: {len(PROXY_LIST)} ({PROXY_ROTATION_MODE})")
     print(f"{'='*60}")
 
 
