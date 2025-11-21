@@ -972,6 +972,17 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
         lines = code.split('\n')
         cleaned = []
 
+        # Определяем минимальный indent для нормализации
+        min_indent = float('inf')
+        for line in lines:
+            stripped = line.strip()
+            if stripped and not stripped.startswith('#'):
+                indent = len(line) - len(line.lstrip())
+                min_indent = min(min_indent, indent)
+
+        if min_indent == float('inf'):
+            min_indent = 0
+
         for line in lines:
             stripped = line.strip()
             # Пропускаем пустые
@@ -981,7 +992,13 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
             if 'get_by_role("heading"' in stripped or "get_by_role('heading'" in stripped:
                 continue
 
-            cleaned.append(line)
+            # Убираем базовый indent для нормализации
+            if min_indent > 0 and len(line) >= min_indent:
+                normalized_line = line[min_indent:]
+            else:
+                normalized_line = line
+
+            cleaned.append(normalized_line)
 
         cleaned_code = '\n'.join(cleaned) if cleaned else "        # Нет дополнительных действий"
 
@@ -1081,8 +1098,8 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
                     result_lines.append(f"{indent_str}try:")
                     result_lines.append(f"{indent_str}    {stripped}")
                     result_lines.append(f"{indent_str}except PlaywrightTimeout:")
-                    result_lines.append(f"{indent_str}    print(f'[ACTION] [WARNING] Timeout: {stripped[:50]}...', flush=True)")
-                    result_lines.append(f"{indent_str}    print(f'[ACTION] [INFO] Продолжаем выполнение...', flush=True)")
+                    result_lines.append(f'{indent_str}    print("[ACTION] [WARNING] Timeout - элемент не найден", flush=True)')
+                    result_lines.append(f'{indent_str}    print("[ACTION] [INFO] Продолжаем выполнение...", flush=True)')
                     result_lines.append(f"{indent_str}    pass")
             else:
                 # Не действие - оставляем как есть
