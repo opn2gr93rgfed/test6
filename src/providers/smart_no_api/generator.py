@@ -23,9 +23,6 @@ class Generator:
             Полный исполняемый Python скрипт
         """
         api_token = config.get('api_token', '')
-        csv_filename = config.get('csv_filename', 'data.csv')
-        csv_data = config.get('csv_data', None)
-        csv_embed_mode = config.get('csv_embed_mode', True)
         proxy_config = config.get('proxy', {})
         proxy_list_config = config.get('proxy_list', {})  # 🔥 СПИСОК ПРОКСИ
         profile_config = config.get('profile', {})
@@ -36,7 +33,7 @@ class Generator:
         self.typing_delay = config.get('typing_delay', 100)
 
         script = self._generate_imports()
-        script += self._generate_config(api_token, csv_filename, csv_data, csv_embed_mode, proxy_config, proxy_list_config, threads_count)
+        script += self._generate_config(api_token, proxy_config, proxy_list_config, threads_count)
         script += self._generate_proxy_rotation()  # 🔥 ФУНКЦИЯ РОТАЦИИ ПРОКСИ
         script += self._generate_octobrowser_functions(profile_config)  # Убрал proxy_config - теперь прокси выбирается динамически
         script += self._generate_helpers()
@@ -61,14 +58,15 @@ import requests
 import threading
 import random
 import re
+import os
+from tkinter import Tk, filedialog
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from playwright.sync_api import sync_playwright, expect, TimeoutError as PlaywrightTimeout
 from typing import Dict, List, Optional
 
 '''
 
-    def _generate_config(self, api_token: str, csv_filename: str, csv_data: List[Dict],
-                         csv_embed_mode: bool, proxy_config: Dict, proxy_list_config: Dict, threads_count: int) -> str:
+    def _generate_config(self, api_token: str, proxy_config: Dict, proxy_list_config: Dict, threads_count: int) -> str:
         config = f'''# ============================================================
 # КОНФИГУРАЦИЯ
 # ============================================================
@@ -77,19 +75,6 @@ from typing import Dict, List, Optional
 API_BASE_URL = "https://app.octobrowser.net/api/v2/automation"
 API_TOKEN = "{api_token}"
 LOCAL_API_URL = "http://localhost:58888/api"
-
-'''
-
-        if csv_embed_mode and csv_data:
-            config += f'''# CSV данные (встроены в скрипт)
-CSV_EMBED_MODE = True
-CSV_DATA = {json.dumps(csv_data, ensure_ascii=False, indent=2)}
-
-'''
-        else:
-            config += f'''# CSV файл
-CSV_EMBED_MODE = False
-CSV_FILENAME = "{csv_filename}"
 
 '''
 
@@ -679,18 +664,64 @@ def wait_for_navigation(page, timeout=30000):
 # ============================================================
 
 def load_csv_data() -> List[Dict]:
-    """Загрузить данные из CSV"""
-    if CSV_EMBED_MODE:
-        return CSV_DATA
-    else:
-        data = []
-        try:
-            with open(CSV_FILENAME, 'r', encoding='utf-8') as f:
-                reader = csv.DictReader(f)
-                data = list(reader)
-        except Exception as e:
-            print(f"[ERROR] Load CSV: {e}")
-        return data
+    """
+    Загрузить данные из CSV файла через диалог выбора файла
+
+    Открывает окно выбора файла, позволяя выбрать CSV файл из любой папки.
+    Файл должен иметь заголовки (первая строка).
+    """
+    print("[CSV] Выберите CSV файл с данными...")
+
+    # Создать скрытое окно Tkinter для диалога
+    root = Tk()
+    root.withdraw()  # Скрыть главное окно
+    root.attributes('-topmost', True)  # Поверх всех окон
+
+    # Открыть диалог выбора файла
+    csv_file_path = filedialog.askopenfilename(
+        title="Выберите CSV файл с данными",
+        filetypes=[
+            ("CSV файлы", "*.csv"),
+            ("Все файлы", "*.*")
+        ],
+        initialdir=os.path.expanduser("~")  # Начать с домашней папки
+    )
+
+    root.destroy()  # Уничтожить окно Tkinter
+
+    # Проверить что файл был выбран
+    if not csv_file_path:
+        print("[CSV] [ERROR] Файл не выбран. Выход.")
+        return []
+
+    # Проверить что файл существует
+    if not os.path.exists(csv_file_path):
+        print(f"[CSV] [ERROR] Файл не существует: {csv_file_path}")
+        return []
+
+    print(f"[CSV] Загрузка файла: {csv_file_path}")
+
+    # Загрузить CSV
+    data = []
+    try:
+        with open(csv_file_path, 'r', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            data = list(reader)
+
+        print(f"[CSV] [OK] Загружено {len(data)} строк")
+
+        # Показать заголовки
+        if data and len(data) > 0:
+            headers = list(data[0].keys())
+            print(f"[CSV] Заголовки: {', '.join(headers)}")
+
+    except Exception as e:
+        print(f"[CSV] [ERROR] Ошибка загрузки CSV: {e}")
+        import traceback
+        traceback.print_exc()
+        return []
+
+    return data
 
 
 '''
