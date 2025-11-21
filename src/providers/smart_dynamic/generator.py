@@ -889,22 +889,34 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
         found_new_question = False
 
         # Проверить каждый heading
-        for heading in headings:
+        for idx, heading in enumerate(headings):
             try:
                 # Получить текст вопроса
                 question_text = heading.inner_text().strip()
 
+                # DEBUG: показываем все heading что находим
+                if answered_count == 0 and idx < 3:  # Только первые 3 и только на первом проходе
+                    print(f"[DYNAMIC_QA] [DEBUG] Обрабатываю heading #{idx+1}: '{question_text}'")
+
                 # Пропустить если уже отвечали
                 if question_text in answered_questions:
+                    if answered_count == 0:
+                        print(f"[DYNAMIC_QA] [DEBUG] Пропускаю - уже отвечали на '{question_text}'")
                     continue
 
                 # Пропустить пустые или слишком короткие
                 if not question_text or len(question_text) < 3:
+                    if answered_count == 0:
+                        print(f"[DYNAMIC_QA] [DEBUG] Пропускаю - слишком короткий (len={len(question_text)})")
                     continue
 
                 # УМНЫЙ ПОИСК В СЛОВАРЕ (точное + нечеткое сопоставление)
                 # Первая попытка - обычный поиск
                 pool_key = find_question_in_pool(question_text, QUESTIONS_POOL, debug=False)
+
+                # DEBUG: показываем результат поиска
+                if answered_count == 0:
+                    print(f"[DYNAMIC_QA] [DEBUG] find_question_in_pool('{question_text}') → {pool_key}")
 
                 # Если не нашли - повторяем с debug
                 if not pool_key and answered_count == 0:
@@ -982,6 +994,8 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
 
             except Exception as e:
                 # Ошибка при обработке конкретного heading - продолжаем со следующим
+                if answered_count == 0:
+                    print(f"[DYNAMIC_QA] [DEBUG] Исключение при обработке heading: {type(e).__name__}: {e}")
                 continue
 
         # Если не нашли новых вопросов - выходим
