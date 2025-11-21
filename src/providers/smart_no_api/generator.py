@@ -869,6 +869,22 @@ def load_csv_data() -> List[Dict]:
             line = lines[i]
             stripped = line.strip()
 
+            # Check for inline special commands (e.g., "page.fill(...)  #pause10")
+            inline_command = None
+            if '#' in stripped and not stripped.startswith('#'):
+                # Split code and comment
+                code_part, _, comment_part = stripped.partition('#')
+                code_part = code_part.strip()
+                comment_part = '#' + comment_part.strip()
+
+                # Check if comment is a special command
+                if self._is_special_command(comment_part):
+                    inline_command = comment_part
+                    stripped = code_part  # Continue processing with code only
+                    # Recreate line with proper indentation
+                    indent = len(line) - len(line.lstrip())
+                    line = ' ' * indent + code_part
+
             # Check for #optional marker
             if stripped.lower() == '#optional':
                 next_action_optional = True
@@ -1090,16 +1106,56 @@ def load_csv_data() -> List[Dict]:
                         wrapped_lines.append(f"{indent_str}    pass")
                         wrapped_lines.append(f'{indent_str}print(f"[POPUP] [OK] {page_var} page loaded - use #scrolldown/#scrollmid for manual scroll control", flush=True)')
 
+            # Process inline special command if found
+            if inline_command:
+                indent_str = ' ' * (len(line) - len(line.lstrip()))
+                command_handled = self._handle_special_command(inline_command, indent_str, wrapped_lines, current_page_context)
+                if not command_handled:
+                    print(f"[GENERATOR] [WARNING] Inline command not recognized: {inline_command}")
+
             i += 1
 
         return '\n'.join(wrapped_lines)
+
+    def _is_special_command(self, comment: str) -> bool:
+        """
+        Проверить, является ли комментарий специальной командой
+
+        Args:
+            comment: Комментарий для проверки
+
+        Returns:
+            True если это специальная команда, False если обычный комментарий
+        """
+        import re
+        comment_lower = comment.lower().strip()
+
+        # Check for pause command
+        if re.match(r'#\s*pause\s*\d+', comment_lower):
+            return True
+
+        # Check for other special commands
+        special_commands = [
+            '#toggle_switches',
+            '#optional',
+            '#scrolldown',
+            '#scroll',
+            '#scrollup',
+            '#scrollmid'
+        ]
+
+        for cmd in special_commands:
+            if comment_lower == cmd or comment_lower.replace(' ', '') == cmd:
+                return True
+
+        return False
 
     def _handle_special_command(self, comment: str, indent_str: str, wrapped_lines: list, page_context: str = 'page') -> bool:
         """
         Обработать специальные команды в комментариях
 
         Поддерживаемые команды:
-        - #pause5, #pause10, #pause20 - пауза N секунд
+        - #pause5, #pause10, #pause20 - пауза N секунд (любое число)
         - #scrolldown, #scroll - скролл вниз до конца страницы
         - #scrollup - скролл вверх к началу страницы
         - #scrollmid - скролл к середине страницы
@@ -1116,14 +1172,14 @@ def load_csv_data() -> List[Dict]:
 
         comment_lower = comment.lower().strip()
 
-        # #pause5, #pause10, #pause20 - пауза N секунд
-        pause_match = re.match(r'#pause(\d+)', comment_lower)
+        # #pause5, #pause10, #pause20 - пауза N секунд (поддерживает пробелы: "# pause10")
+        pause_match = re.match(r'#\s*pause\s*(\d+)', comment_lower)
         if pause_match:
             seconds = pause_match.group(1)
             wrapped_lines.append(f"{indent_str}# User command: pause {seconds} seconds")
-            wrapped_lines.append(f"{indent_str}print(f'[PAUSE] Waiting {seconds} seconds...')")
+            wrapped_lines.append(f"{indent_str}print(f'[PAUSE] Waiting {seconds} seconds...', flush=True)")
             wrapped_lines.append(f"{indent_str}time.sleep({seconds})")
-            wrapped_lines.append(f"{indent_str}print(f'[PAUSE] Resume')")
+            wrapped_lines.append(f"{indent_str}print(f'[PAUSE] Resume', flush=True)")
             return True
 
         # #toggle_switches - переключить switches (первый checked -> uncheck, первый unchecked -> check)
