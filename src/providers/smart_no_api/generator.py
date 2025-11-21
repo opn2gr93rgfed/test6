@@ -593,11 +593,9 @@ def check_heading(page, expected_texts, timeout=5000):
                 # Continue to next alternative
                 continue
 
-    # If no heading found, log warning but CONTINUE execution
+    # If no heading found, SILENTLY CONTINUE execution
     # This allows handling of dynamic flows, A/B tests, skipped questions, etc.
-    print(f"[CHECK_HEADING] [WARNING] Заголовок не найден из списка: {expected_texts}")
-    print(f"[CHECK_HEADING] [INFO] Это может быть нормально - сайт может показывать вопросы в разном порядке.")
-    print(f"[CHECK_HEADING] [INFO] Продолжаем выполнение...")
+    # No logging needed - this is expected behavior for dynamic forms
     # Even if heading not found, give page a moment to stabilize
     time.sleep(0.3)
     return False
@@ -1111,6 +1109,16 @@ def load_csv_data() -> List[Dict]:
                 sanitized_code = stripped.replace("'", "'").replace("'", "'")
                 sanitized_code = self._replace_fill_with_typing(sanitized_code)
 
+                # 🔥 FIX: If #optional was also set, add short timeout to scroll_search attempts
+                # This prevents 90+ second waits (3 positions × 30s default timeout)
+                scroll_timeout = 10000  # Default: 10 seconds per scroll position
+                if next_action_optional:
+                    scroll_timeout = 8000  # Shorter timeout for optional elements: 8 seconds
+                    wrapped_lines.append(f"{indent_str}# This is an OPTIONAL scroll search (short timeout)")
+
+                # Add explicit timeout to the action
+                sanitized_code = self._add_timeout_to_action(sanitized_code, timeout_ms=scroll_timeout)
+
                 # Extract page variable (page, page1, page2, page3)
                 import re
                 match = re.search(r'(page\d*)\.', stripped)
@@ -1143,7 +1151,7 @@ def load_csv_data() -> List[Dict]:
                 wrapped_lines.append(f"{indent_str}        except:")
                 wrapped_lines.append(f"{indent_str}            pass")
                 wrapped_lines.append(f"{indent_str}        ")
-                wrapped_lines.append(f"{indent_str}        # Try to find and interact with element (with extended timeout)")
+                wrapped_lines.append(f"{indent_str}        # Try to find and interact with element (with timeout={scroll_timeout}ms)")
                 wrapped_lines.append(f"{indent_str}        {sanitized_code}")
                 wrapped_lines.append(f'{indent_str}        print(f"[SCROLL_SEARCH] [OK] Element found at {{scroll_name}}: {action_desc}", flush=True)')
                 wrapped_lines.append(f"{indent_str}        scroll_search_found = True")
@@ -1157,6 +1165,7 @@ def load_csv_data() -> List[Dict]:
                 wrapped_lines.append(f'{indent_str}    print(f"[SCROLL_SEARCH] [INFO] Continuing execution (element may not be required)...", flush=True)')
 
                 next_action_scroll_search = False  # Reset marker
+                next_action_optional = False  # Reset optional marker (both flags consumed)
                 i += 1
                 continue
 
