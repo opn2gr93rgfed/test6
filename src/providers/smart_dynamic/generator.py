@@ -964,7 +964,7 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
 
     def _clean_code_section(self, code: str) -> str:
         """
-        Очищает секцию кода от лишних строк и нормализует
+        Очищает секцию кода от лишних строк, нормализует и добавляет обработку ошибок
         """
         if not code or not code.strip():
             return "        # Нет дополнительных действий"
@@ -983,7 +983,114 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
 
             cleaned.append(line)
 
-        return '\n'.join(cleaned) if cleaned else "        # Нет дополнительных действий"
+        cleaned_code = '\n'.join(cleaned) if cleaned else "        # Нет дополнительных действий"
+
+        # Применяем обработку ошибок для resilience (особенно важно для post_questions_code)
+        return self._add_error_handling_to_actions(cleaned_code)
+
+    def _add_error_handling_to_actions(self, code: str) -> str:
+        """
+        Добавляет обработку ошибок для Playwright действий
+
+        Оборачивает клики, fill и другие действия в try-except или retry логику
+        """
+        if not code or not code.strip():
+            return code
+
+        lines = code.split('\n')
+        result_lines = []
+        i = 0
+        inside_with_block = False
+        with_block_indent = 0
+
+        while i < len(lines):
+            line = lines[i]
+            stripped = line.strip()
+
+            # Пропускаем пустые строки
+            if not stripped:
+                result_lines.append(line)
+                i += 1
+                continue
+
+            # Определяем текущий indent
+            current_indent = len(line) - len(line.lstrip())
+
+            # Отслеживаем вход в with блок
+            if stripped.startswith('with '):
+                result_lines.append(line)
+                inside_with_block = True
+                with_block_indent = current_indent
+                i += 1
+                continue
+
+            # Отслеживаем выход из with блока
+            if inside_with_block and current_indent <= with_block_indent and not stripped.startswith('with '):
+                inside_with_block = False
+
+            # Специальные команды (#pause, #scroll, etc.) - оставляем как есть
+            if stripped.startswith('#'):
+                result_lines.append(line)
+                i += 1
+                continue
+
+            # Присваивания (page1 = ...) - оставляем как есть, но выходим из with блока
+            if '=' in stripped and not any(op in stripped for op in ['.click(', '.fill(', '.press(']):
+                result_lines.append(line)
+                if inside_with_block and current_indent <= with_block_indent:
+                    inside_with_block = False
+                i += 1
+                continue
+
+            # Проверяем, является ли это Playwright действием
+            is_action = any(pattern in stripped for pattern in [
+                '.click(',
+                '.fill(',
+                '.press(',
+                '.type(',
+                '.select_option(',
+                '.check(',
+                '.uncheck(',
+            ])
+
+            if is_action:
+                # Получаем индент
+                indent_str = ' ' * current_indent
+
+                # Действия внутри with блока критичны - нужен retry с прогрессивными задержками
+                if inside_with_block:
+                    # RETRY ЛОГИКА для критичных действий (popup открытие, navigation)
+                    result_lines.append(f"{indent_str}# Retry logic for critical action")
+                    result_lines.append(f"{indent_str}max_retries = 5")
+                    result_lines.append(f"{indent_str}for retry_attempt in range(max_retries):")
+                    result_lines.append(f"{indent_str}    try:")
+                    result_lines.append(f"{indent_str}        if retry_attempt > 0:")
+                    result_lines.append(f"{indent_str}            wait_time = retry_attempt * 3  # 3s, 6s, 9s, 12s, 15s")
+                    result_lines.append(f"{indent_str}            print(f'[RETRY] Attempt {{retry_attempt+1}}/{{max_retries}} after {{wait_time}}s...', flush=True)")
+                    result_lines.append(f"{indent_str}            time.sleep(wait_time)")
+                    result_lines.append(f"{indent_str}        {stripped}")
+                    result_lines.append(f"{indent_str}        print(f'[ACTION] [OK] Success', flush=True)")
+                    result_lines.append(f"{indent_str}        break")
+                    result_lines.append(f"{indent_str}    except PlaywrightTimeout:")
+                    result_lines.append(f"{indent_str}        if retry_attempt == max_retries - 1:")
+                    result_lines.append(f"{indent_str}            print(f'[ACTION] [ERROR] Failed after {{max_retries}} retries', flush=True)")
+                    result_lines.append(f"{indent_str}            raise")
+                    result_lines.append(f"{indent_str}        print(f'[RETRY] Timeout, retrying...', flush=True)")
+                else:
+                    # Действия вне with блока - optional, простой try-except
+                    result_lines.append(f"{indent_str}try:")
+                    result_lines.append(f"{indent_str}    {stripped}")
+                    result_lines.append(f"{indent_str}except PlaywrightTimeout:")
+                    result_lines.append(f"{indent_str}    print(f'[ACTION] [WARNING] Timeout: {stripped[:50]}...', flush=True)")
+                    result_lines.append(f"{indent_str}    print(f'[ACTION] [INFO] Продолжаем выполнение...', flush=True)")
+                    result_lines.append(f"{indent_str}    pass")
+            else:
+                # Не действие - оставляем как есть
+                result_lines.append(line)
+
+            i += 1
+
+        return '\n'.join(result_lines)
 
     def _indent_code(self, code: str, spaces: int) -> str:
         """Добавить отступы к коду"""

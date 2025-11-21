@@ -681,9 +681,24 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
         # ============================================================
             page.goto("https://www.mytest.com/")
             #pause10
-            page.get_by_role("textbox", name="Enter your ZIP code").click()
-            page.get_by_role("textbox", name="Enter your ZIP code").fill(data_row["Field1"])
-            page.get_by_role("button", name="See My Quotes").click()
+            try:
+                page.get_by_role("textbox", name="Enter your ZIP code").click()
+            except PlaywrightTimeout:
+                print(f'[ACTION] [WARNING] Timeout: page.get_by_role("textbox", name="Enter your ZIP c...', flush=True)
+                print(f'[ACTION] [INFO] Продолжаем выполнение...', flush=True)
+                pass
+            try:
+                page.get_by_role("textbox", name="Enter your ZIP code").fill(data_row["Field1"])
+            except PlaywrightTimeout:
+                print(f'[ACTION] [WARNING] Timeout: page.get_by_role("textbox", name="Enter your ZIP c...', flush=True)
+                print(f'[ACTION] [INFO] Продолжаем выполнение...', flush=True)
+                pass
+            try:
+                page.get_by_role("button", name="See My Quotes").click()
+            except PlaywrightTimeout:
+                print(f'[ACTION] [WARNING] Timeout: page.get_by_role("button", name="See My Quotes").c...', flush=True)
+                print(f'[ACTION] [INFO] Продолжаем выполнение...', flush=True)
+                pass
             # Первые 3 вопроса
 
         # ============================================================
@@ -696,14 +711,39 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
         # ДЕЙСТВИЯ ПОСЛЕ ВОПРОСОВ (popup окна, финальные действия)
         # ============================================================
             with page.expect_popup() as page1_info:
-                page.get_by_role("button", name="View my quotes").click()
+                # Retry logic for critical action
+                max_retries = 5
+                for retry_attempt in range(max_retries):
+                    try:
+                        if retry_attempt > 0:
+                            wait_time = retry_attempt * 3  # 3s, 6s, 9s, 12s, 15s
+                            print(f'[RETRY] Attempt {retry_attempt+1}/{max_retries} after {wait_time}s...', flush=True)
+                            time.sleep(wait_time)
+                        page.get_by_role("button", name="View my quotes").click()
+                        print(f'[ACTION] [OK] Success', flush=True)
+                        break
+                    except PlaywrightTimeout:
+                        if retry_attempt == max_retries - 1:
+                            print(f'[ACTION] [ERROR] Failed after {max_retries} retries', flush=True)
+                            raise
+                        print(f'[RETRY] Timeout, retrying...', flush=True)
             page1 = page1_info.value
             #optional
-            page.get_by_role("button", name="Not Now").click()
+            try:
+                page.get_by_role("button", name="Not Now").click()
+            except PlaywrightTimeout:
+                print(f'[ACTION] [WARNING] Timeout: page.get_by_role("button", name="Not Now").click()...', flush=True)
+                print(f'[ACTION] [INFO] Продолжаем выполнение...', flush=True)
+                pass
             #pause40
             #optional
             #scroll_search
-            page1.get_by_role("button", name="Show More").click()
+            try:
+                page1.get_by_role("button", name="Show More").click()
+            except PlaywrightTimeout:
+                print(f'[ACTION] [WARNING] Timeout: page1.get_by_role("button", name="Show More").clic...', flush=True)
+                print(f'[ACTION] [INFO] Продолжаем выполнение...', flush=True)
+                pass
 
         print(f"[ITERATION {iteration_number}] [OK] Завершено успешно")
         return True
