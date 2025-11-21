@@ -639,6 +639,55 @@ def wait_for_navigation(page, timeout=30000):
         return False
 
 
+def scroll_to_element(page, selector, by_role=None, name=None, max_scrolls=10):
+    """
+    Скроллит страницу вниз пока не найдет элемент
+
+    Args:
+        page: Playwright page
+        selector: CSS selector (если by_role=None)
+        by_role: Тип роли (button, heading, textbox)
+        name: Имя элемента для get_by_role
+        max_scrolls: Максимум скроллов
+
+    Returns:
+        True если элемент найден, False если нет
+    """
+    print(f"[SCROLL_SEARCH] Ищу элемент с прокруткой...")
+
+    for scroll_attempt in range(max_scrolls):
+        try:
+            # Проверяем наличие элемента
+            if by_role:
+                element = page.get_by_role(by_role, name=name).first
+            else:
+                element = page.locator(selector).first
+
+            # Пробуем получить элемент с коротким таймаутом
+            if element.is_visible(timeout=1000):
+                print(f"[SCROLL_SEARCH] [OK] Элемент найден после {scroll_attempt} прокруток")
+                # Прокрутить к элементу
+                element.scroll_into_view_if_needed(timeout=2000)
+                time.sleep(0.5)
+                return True
+        except:
+            pass  # Элемент не найден, продолжаем
+
+        # Скроллим вниз
+        current_scroll = page.evaluate('window.pageYOffset')
+        page.evaluate('window.scrollBy(0, window.innerHeight * 0.8)')  # Скролл на 80% высоты экрана
+        time.sleep(0.5)
+
+        # Проверяем достигли ли конца страницы
+        new_scroll = page.evaluate('window.pageYOffset')
+        if new_scroll == current_scroll:
+            print(f"[SCROLL_SEARCH] [!] Достигнут конец страницы, элемент не найден")
+            return False
+
+    print(f"[SCROLL_SEARCH] [!] Элемент не найден после {max_scrolls} прокруток")
+    return False
+
+
 def execute_special_command(command: str, page, data_row: Dict):
     """
     Выполнить специальную команду (#pause, #scroll, etc.)
@@ -1151,6 +1200,7 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
         i = 0
         inside_with_block = False
         with_block_indent = 0
+        scroll_next_action = False  # Флаг для #scroll_search
 
         while i < len(lines):
             line = lines[i]
@@ -1215,6 +1265,13 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
                     i += 1
                     continue
 
+                # #scroll_search - флаг для следующего действия
+                if special_cmd == '#scroll_search':
+                    scroll_next_action = True
+                    result_lines.append(f"{indent_str}# Scroll search enabled for next action")
+                    i += 1
+                    continue
+
                 # Неизвестная команда - оставляем как комментарий
                 result_lines.append(line)
                 i += 1
@@ -1242,6 +1299,40 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
             if is_action:
                 # Получаем индент
                 indent_str = ' ' * current_indent
+
+                # Если установлен флаг scroll_next_action - добавляем scroll_to_element() перед действием
+                if scroll_next_action:
+                    # Парсим действие чтобы определить page, selector, role
+                    page_var = 'page'  # По умолчанию
+                    if 'page1.' in stripped:
+                        page_var = 'page1'
+                    elif 'page2.' in stripped:
+                        page_var = 'page2'
+                    elif 'page3.' in stripped:
+                        page_var = 'page3'
+
+                    # Определяем тип действия
+                    if 'get_by_role(' in stripped:
+                        # Извлекаем роль и имя
+                        role_match = re.search(r'get_by_role\("(\w+)"\s*,\s*name="([^"]+)"', stripped)
+                        if role_match:
+                            role = role_match.group(1)
+                            name = role_match.group(2)
+                            result_lines.append(f"{indent_str}# Scroll search for element")
+                            result_lines.append(f'{indent_str}scroll_to_element({page_var}, None, by_role="{role}", name="{name}")')
+                    elif 'locator(' in stripped:
+                        # Извлекаем селектор
+                        selector_match = re.search(r"locator\(['\"]([^'\"]+)['\"]\)", stripped)
+                        if not selector_match:
+                            selector_match = re.search(r'locator\("([^"]+)"\)', stripped)
+                        if selector_match:
+                            selector = selector_match.group(1)
+                            # Экранируем кавычки в селекторе
+                            selector = selector.replace('"', '\\"')
+                            result_lines.append(f"{indent_str}# Scroll search for element")
+                            result_lines.append(f'{indent_str}scroll_to_element({page_var}, "{selector}")')
+
+                    scroll_next_action = False  # Сбрасываем флаг
 
                 # Действия внутри with блока критичны - нужен retry с прогрессивными задержками
                 if inside_with_block:
