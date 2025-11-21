@@ -1017,17 +1017,6 @@ def load_csv_data() -> List[Dict]:
                 'page3.',
             ])
 
-            # Actions inside 'with' blocks are critical (must succeed to open popup/navigate)
-            # BUT: if #optional marker was set, respect it even inside with blocks
-            if inside_with_block and indent > with_block_indent and not next_action_optional:
-                is_critical = True
-
-            # If #optional marker was set, force this action to be non-critical
-            # This check MUST come AFTER with-block check to override it
-            if next_action_optional:
-                is_critical = False
-                next_action_optional = False  # Reset marker
-
             # Check if this is a resilient action (click, fill, etc.)
             is_action = any(pattern in stripped for pattern in [
                 '.click(',
@@ -1039,6 +1028,17 @@ def load_csv_data() -> List[Dict]:
                 '.press(',
                 '.type(',
             ])
+
+            # Actions inside 'with' blocks are critical (must succeed to open popup/navigate)
+            # BUT: if #optional marker was set, respect it even inside with blocks
+            if inside_with_block and indent > with_block_indent and not next_action_optional:
+                is_critical = True
+
+            # If #optional marker was set, force this action to be non-critical
+            # This check MUST come AFTER with-block check to override it
+            if next_action_optional and is_action:
+                is_critical = False
+                next_action_optional = False  # Reset marker ONLY after processing an action
 
             # Check if this is a popup page action (page1/page2/page3) that needs retry logic
             is_popup_action = is_action and any(f'page{n}.' in stripped for n in [1, 2, 3])
