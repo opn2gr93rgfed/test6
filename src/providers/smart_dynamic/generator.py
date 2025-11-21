@@ -8,7 +8,7 @@ Provider: smart_dynamic
 используем hash-map (словарь Python) для моментального поиска O(1).
 
 WORKFLOW:
-1. Парсим user_code и извлекаем все пары "вопрос → действие"
+1. Парсим user_code и извлекаем все пары "вопрос -> действие"
 2. Создаем словарь QUESTIONS_POOL
 3. На каждом шаге скрипт:
    - Находит все heading на странице
@@ -166,7 +166,7 @@ class Generator:
         print(f"\n[PARSER] DEBUG: Найдено {len(questions_pool)} вопросов в user_code:")
         for i, (q, data) in enumerate(list(questions_pool.items())[:10], 1):
             actions_count = len(data.get('actions', []))
-            print(f"[PARSER]   {i}. '{q}' → {actions_count} действий")
+            print(f"[PARSER]   {i}. '{q}' -> {actions_count} действий")
             if actions_count == 0:
                 print(f"[PARSER]      WARNING: НЕТ ДЕЙСТВИЙ! current_actions было: {len(current_actions) if current_actions else 0} строк")
 
@@ -758,7 +758,7 @@ def load_csv_data() -> List[Dict]:
 
     def _generate_questions_pool(self, questions_pool: Dict) -> str:
         """
-        Генерирует словарь QUESTIONS_POOL с парами "вопрос → действие"
+        Генерирует словарь QUESTIONS_POOL с парами "вопрос -> действие"
 
         Args:
             questions_pool: Извлеченный словарь вопросов из user_code
@@ -822,7 +822,7 @@ def find_question_in_pool(question_text: str, pool: Dict, debug: bool = False) -
         # Точное совпадение нормализованных
         if normalized_question == normalized_key:
             if debug:
-                print(f"[SEARCH] ✓ НАЙДЕНО (нормализованное): '{pool_key}'")
+                print(f"[SEARCH] [OK] НАЙДЕНО (нормализованное): '{pool_key}'")
             return pool_key
 
         # Частичное совпадение - pool_key содержится в question_text или наоборот
@@ -831,15 +831,15 @@ def find_question_in_pool(question_text: str, pool: Dict, debug: bool = False) -
             len_ratio = min(len(normalized_key), len(normalized_question)) / max(len(normalized_key), len(normalized_question))
             if len_ratio > 0.7:
                 if debug:
-                    print(f"[SEARCH] ✓ НАЙДЕНО (частичное, ratio={len_ratio:.2f}): '{pool_key}'")
+                    print(f"[SEARCH] [OK] НАЙДЕНО (частичное, ratio={len_ratio:.2f}): '{pool_key}'")
                 return pool_key
 
     if debug:
-        print(f"[SEARCH] ✗ НЕ НАЙДЕНО")
+        print(f"[SEARCH] [FAIL] НЕ НАЙДЕНО")
         print(f"[SEARCH] Доступные ключи в пуле (первые 5):")
         for i, key in enumerate(list(pool.keys())[:5]):
             normalized = normalize_text(key)
-            print(f"[SEARCH]   {i+1}. '{key}' → '{normalized}'")
+            print(f"[SEARCH]   {i+1}. '{key}' -> '{normalized}'")
 
     return None
 
@@ -916,7 +916,7 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
 
                 # DEBUG: показываем результат поиска
                 if answered_count == 0:
-                    print(f"[DYNAMIC_QA] [DEBUG] find_question_in_pool('{question_text}') → {pool_key}")
+                    print(f"[DYNAMIC_QA] [DEBUG] find_question_in_pool('{question_text}') -> {pool_key}")
 
                 # Если не нашли - повторяем с debug
                 if not pool_key and answered_count == 0:
@@ -924,9 +924,9 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
                     pool_key = find_question_in_pool(question_text, QUESTIONS_POOL, debug=True)
 
                 if pool_key:
-                    print(f"\\n[DYNAMIC_QA] ✓ Найден вопрос на странице: {question_text}")
+                    print(f"\\n[DYNAMIC_QA] [OK] Найден вопрос на странице: {question_text}")
                     if pool_key != question_text:
-                        print(f"[DYNAMIC_QA] ✓ Сопоставлен с пулом: {pool_key}")
+                        print(f"[DYNAMIC_QA] [OK] Сопоставлен с пулом: {pool_key}")
 
                     question_data = QUESTIONS_POOL[pool_key]
 
@@ -943,7 +943,7 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
                             # Клик по кнопке
                             if action_type == 'button_click':
                                 button_text = action.get('value')
-                                print(f"[DYNAMIC_QA]   → Кликаю кнопку: {button_text}")
+                                print(f"[DYNAMIC_QA]   -> Кликаю кнопку: {button_text}")
                                 page.get_by_role("button", name=button_text).click(timeout=10000)
                                 time.sleep(0.5)
 
@@ -955,7 +955,7 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
 
                                 value = data_row.get(data_key, static_value) if data_key else static_value
 
-                                print(f"[DYNAMIC_QA]   → Заполняю поле '{field_name}': {value}")
+                                print(f"[DYNAMIC_QA]   -> Заполняю поле '{field_name}': {value}")
                                 textbox = page.get_by_role("textbox", name=field_name).first
                                 textbox.click(timeout=5000)
                                 textbox.fill(value, timeout=5000)
@@ -964,14 +964,14 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
                             # Нажатие клавиши
                             elif action_type == 'press_key':
                                 key = action.get('key')
-                                print(f"[DYNAMIC_QA]   → Нажимаю клавишу: {key}")
+                                print(f"[DYNAMIC_QA]   -> Нажимаю клавишу: {key}")
                                 page.keyboard.press(key)
                                 time.sleep(0.2)
 
                             # Клик по locator
                             elif action_type == 'locator_click':
                                 selector = action.get('selector')
-                                print(f"[DYNAMIC_QA]   → Кликаю элемент: {selector[:50]}...")
+                                print(f"[DYNAMIC_QA]   -> Кликаю элемент: {selector[:50]}...")
                                 page.locator(selector).first.click(timeout=10000)
                                 time.sleep(0.5)
 
@@ -984,7 +984,7 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
                     answered_count += 1
                     found_new_question = True
 
-                    print(f"[DYNAMIC_QA] ✓ Вопрос обработан ({answered_count}/{max_questions})")
+                    print(f"[DYNAMIC_QA] [OK] Вопрос обработан ({answered_count}/{max_questions})")
 
                     # Пауза для загрузки следующего вопроса
                     time.sleep(1.5)
