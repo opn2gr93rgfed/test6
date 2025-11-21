@@ -685,6 +685,31 @@ class ModernAppV3(ctk.CTk):
             text_color=self.theme['text_secondary']
         ).grid(row=4, column=2, padx=(5, 15), pady=10, sticky="w")
 
+        # 🌐 Network Capture Patterns
+        ctk.CTkLabel(
+            timeouts_frame,
+            text="🌐 Network Capture:",
+            font=(ModernTheme.FONT['family'], 11),
+            text_color=self.theme['text_primary']
+        ).grid(row=5, column=0, padx=(15, 5), pady=10, sticky="w")
+
+        self.network_patterns_var = tk.StringVar(value="")
+        network_patterns_entry = ctk.CTkEntry(
+            timeouts_frame,
+            textvariable=self.network_patterns_var,
+            placeholder_text="validate, api/submit, quotes",
+            width=200,
+            font=(ModernTheme.FONT['family'], 11)
+        )
+        network_patterns_entry.grid(row=5, column=1, columnspan=2, padx=5, pady=10, sticky="ew")
+
+        ctk.CTkLabel(
+            timeouts_frame,
+            text="паттерны через запятую (захват данных из Network)",
+            font=(ModernTheme.FONT['family'], 9),
+            text_color=self.theme['text_secondary']
+        ).grid(row=5, column=3, padx=(5, 15), pady=10, sticky="w")
+
         # ========== КНОПКИ ДЕЙСТВИЙ (АДАПТИВНЫЙ LAYOUT 2x3) ==========
         btn_frame = ctk.CTkFrame(tab, fg_color="transparent")
         btn_frame.grid(row=4, column=0, sticky="ew", padx=24, pady=(8, 24))
@@ -1062,7 +1087,9 @@ class ModernAppV3(ctk.CTk):
                 'simulate_typing': self.simulate_typing_var.get(),
                 'typing_delay': int(self.typing_delay_var.get()) if self.typing_delay_var.get().isdigit() else 100,
                 # 🔥 МНОГОПОТОЧНОСТЬ
-                'threads_count': int(self.threads_count_var.get()) if self.threads_count_var.get().isdigit() else 1
+                'threads_count': int(self.threads_count_var.get()) if self.threads_count_var.get().isdigit() else 1,
+                # 🌐 NETWORK CAPTURE
+                'network_capture_patterns': [p.strip() for p in self.network_patterns_var.get().split(',') if p.strip()]
             }
 
             print(f"[DEBUG] API Token: {config['api_token'][:10]}..." if config['api_token'] else "[DEBUG] API Token: пуст")  # DEBUG
