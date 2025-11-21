@@ -40,6 +40,9 @@ class PlaywrightScriptGenerator:
         # 🔥 ПЕРЕДАЁМ НАСТРОЙКИ ПРОФИЛЯ В ГЕНЕРАТОР
         script += self._generate_octobrowser_functions(profile_config)
 
+        # 🔥 ДОБАВИТЬ ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ СТАБИЛЬНОСТИ
+        script += self._generate_helper_functions()
+
         # Добавить SMS функции если включено
         if use_sms:
             script += self._generate_sms_functions(sms_config)
@@ -501,6 +504,155 @@ def cancel_sms_activation(activation_id: str) -> bool:
 
 '''
 
+    def _generate_helper_functions(self) -> str:
+        """Генерирует вспомогательные функции для стабильной работы"""
+        return '''# ============================================================
+# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ СТАБИЛЬНОЙ АВТОМАТИЗАЦИИ
+# ============================================================
+
+def ensure_page_ready(page, timeout: int = 30000):
+    """
+    Убедиться что страница полностью загружена перед выполнением действий
+
+    Args:
+        page: Playwright page объект
+        timeout: Максимальное время ожидания в миллисекундах
+    """
+    try:
+        # Ждем полной загрузки DOM
+        page.wait_for_load_state('domcontentloaded', timeout=timeout)
+        # Ждем загрузки всех ресурсов
+        page.wait_for_load_state('load', timeout=timeout)
+        # Ждем завершения network activity
+        page.wait_for_load_state('networkidle', timeout=timeout)
+        print("[PAGE_READY] ✓ Страница полностью загружена")
+        return True
+    except Exception as e:
+        print(f"[PAGE_READY] [WARNING] Не удалось дождаться полной загрузки: {e}")
+        # Продолжаем даже если не дождались - может страница уже готова
+        return True
+
+
+def block_marketing_popups(page):
+    """
+    Блокировка маркетинговых опросников через JavaScript injection
+
+    Это НЕ критичные pop-ups (опросы, подписки), их можно блокировать
+    """
+    try:
+        page.add_init_script("""
+            // Скрываем все модальные окна и overlay
+            const style = document.createElement('style');
+            style.textContent = `
+                [class*="modal"][class*="survey"],
+                [class*="popup"][class*="survey"],
+                [id*="survey"],
+                [role="dialog"][aria-label*="survey" i],
+                [role="dialog"][aria-label*="feedback" i],
+                [class*="feedback-modal"],
+                [class*="survey-modal"] {
+                    display: none !important;
+                    visibility: hidden !important;
+                    opacity: 0 !important;
+                    pointer-events: none !important;
+                }
+            `;
+            document.head.appendChild(style);
+
+            // MutationObserver для автозакрытия динамических маркетинговых pop-ups
+            const observer = new MutationObserver(() => {
+                // Закрываем только маркетинговые модалки (с survey, feedback)
+                document.querySelectorAll('[role="dialog"]').forEach(el => {
+                    const label = el.getAttribute('aria-label') || '';
+                    if (label.toLowerCase().includes('survey') ||
+                        label.toLowerCase().includes('feedback') ||
+                        label.toLowerCase().includes('where did you hear')) {
+                        el.style.display = 'none';
+                        console.log('[POPUP_BLOCKER] Blocked marketing popup:', label);
+                    }
+                });
+            });
+            observer.observe(document.body, { childList: true, subtree: true });
+
+            console.log('[POPUP_BLOCKER] Marketing popup blocker активирован');
+        """)
+        print("[POPUP_BLOCKER] ✓ Маркетинговые опросники заблокированы")
+    except Exception as e:
+        print(f"[POPUP_BLOCKER] [WARNING] Не удалось активировать блокировку: {e}")
+
+
+def close_popup_if_exists(page, timeout: int = 3000):
+    """
+    Закрыть маркетинговый pop-up если он появился (не критично)
+
+    Args:
+        page: Playwright page объект
+        timeout: Время ожидания появления pop-up
+
+    Returns:
+        bool: True если закрыли, False если не нашли
+    """
+    try:
+        # Список селекторов для кнопок закрытия опросников
+        close_selectors = [
+            'button[aria-label*="close" i]',
+            'button[aria-label*="dismiss" i]',
+            'button[aria-label*="no thanks" i]',
+            '[class*="close"]',
+            '[class*="dismiss"]',
+            'button:has-text("×")',
+            'button:has-text("✕")',
+            'button:has-text("No thanks")',
+            'button:has-text("Skip")',
+            '[data-testid*="close"]',
+        ]
+
+        for selector in close_selectors:
+            try:
+                element = page.locator(selector).first
+                if element.is_visible(timeout=timeout):
+                    element.click(timeout=timeout)
+                    print(f"[POPUP_CLOSE] ✓ Закрыт опросник по селектору: {selector}")
+                    return True
+            except:
+                continue
+
+        print("[POPUP_CLOSE] Pop-up не найден или уже закрыт")
+        return False
+
+    except Exception as e:
+        print(f"[POPUP_CLOSE] [INFO] Опросник не обнаружен: {e}")
+        return False
+
+
+def safe_action(action_func, action_description: str, optional: bool = False, timeout: int = 30000):
+    """
+    Безопасное выполнение действия с проверкой готовности элемента
+
+    Args:
+        action_func: Функция действия (lambda)
+        action_description: Описание действия для логов
+        optional: Если True - не падать при ошибке (для pop-ups)
+        timeout: Timeout в миллисекундах
+
+    Returns:
+        bool: True если успешно, False если ошибка
+    """
+    try:
+        action_func()
+        print(f"[SAFE_ACTION] ✓ {action_description}")
+        return True
+    except Exception as e:
+        if optional:
+            print(f"[SAFE_ACTION] [SKIP] {action_description} - пропущено (optional): {e}")
+            return False
+        else:
+            print(f"[SAFE_ACTION] [ERROR] {action_description} - критическая ошибка: {e}")
+            raise
+
+
+'''
+
     def _generate_csv_loader(self, use_sms: bool = False) -> str:
         """Генерирует функцию загрузки CSV"""
         return '''# ============================================================
@@ -710,6 +862,9 @@ def update_csv_row(filename: str = None, row_index: int = 0, phone_number: Optio
             else:
                 print("[ERROR] Нет доступных контекстов браузера")
                 return False
+
+            # 🔥 АКТИВИРОВАТЬ БЛОКИРОВКУ МАРКЕТИНГОВЫХ POP-UPS
+            block_marketing_popups(page)
 
             print(f"[OK] Страница готова к автоматизации")
 {otp_helper}
