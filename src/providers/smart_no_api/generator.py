@@ -901,7 +901,12 @@ def load_csv_data() -> List[Dict]:
             # Check for #optional marker
             if stripped.lower() == '#optional':
                 next_action_optional = True
-                wrapped_lines.append(f"{' ' * (len(line) - len(line.lstrip()))}# Next action is optional (will not fail script if element not found)")
+                # Calculate correct indentation (accounting for 'with' blocks)
+                indent = len(line) - len(line.lstrip())
+                if inside_with_block and indent <= with_block_indent:
+                    indent = with_block_indent + 4
+                indent_str = ' ' * indent
+                wrapped_lines.append(f"{indent_str}# Next action is optional (will not fail script if element not found)")
                 i += 1
                 continue
 
@@ -913,15 +918,24 @@ def load_csv_data() -> List[Dict]:
 
             # Handle special command comments BEFORE treating as regular comments
             if stripped.startswith('#'):
-                indent_str = ' ' * (len(line) - len(line.lstrip()))
+                # Calculate correct indentation (accounting for 'with' blocks)
+                indent = len(line) - len(line.lstrip())
+
+                # FIX: Apply same indentation fix as for regular actions
+                # If we're inside a with block and line has wrong indent, fix it
+                if inside_with_block and indent <= with_block_indent:
+                    # Line inside with block should have at least with_block_indent + 4
+                    indent = with_block_indent + 4
+
+                indent_str = ' ' * indent
                 command_handled = self._handle_special_command(stripped, indent_str, wrapped_lines, current_page_context)
                 if command_handled:
                     # Special command was processed, continue to next line
                     i += 1
                     continue
                 else:
-                    # Regular comment, keep as is
-                    wrapped_lines.append(line)
+                    # Regular comment, keep as is (with potentially fixed indent)
+                    wrapped_lines.append(indent_str + stripped)
                     i += 1
                     continue
 
