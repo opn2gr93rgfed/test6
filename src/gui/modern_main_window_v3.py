@@ -1263,6 +1263,16 @@ class ModernAppV3(ctk.CTk):
                 self.toast.warning("⚠️ CSV файл пуст")
                 return
 
+            # Обработка пустых значений - заменить None и пустые значения на пустые строки
+            # Это критично для json.dumps в генераторе, который не работает с None
+            for row in rows:
+                for key in row:
+                    if row[key] is None or row[key] == '':
+                        row[key] = ''
+                    else:
+                        # Конвертировать все значения в строки
+                        row[key] = str(row[key]).strip()
+
             # Сохраняем данные
             self.csv_data_rows = rows
             self.csv_file_path = filepath
