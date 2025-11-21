@@ -78,46 +78,54 @@ def find_question_in_pool(question_text: str, pool: Dict, debug: bool = False) -
 QUESTIONS_POOL = {
     "Are you currently insured?": {
         "actions": [
-            {"type": "button_click", "name": "No"}
-        ]
+            {"type": "button_click", "value": "No"}
+        ],
+        "special_commands": []
     },
     "Are you looking to buy": {
         "actions": [
-            {"type": "button_click", "name": "No"}
-        ]
+            {"type": "button_click", "value": "No"}
+        ],
+        "special_commands": []
     },
     "Do you own or rent your home?": {
         "actions": [
-            {"type": "button_click", "name": "Own"}
-        ]
+            {"type": "button_click", "value": "Own"}
+        ],
+        "special_commands": []
     },
     "What's your car year?": {
         "actions": [
-            {"type": "button_click", "name": "2017"}
-        ]
+            {"type": "button_click", "value": "2017"}
+        ],
+        "special_commands": []
     },
     "What's your car make?": {
         "actions": [
-            {"type": "button_click", "name": "Ford icon Ford"}
-        ]
+            {"type": "button_click", "value": "Ford icon Ford"}
+        ],
+        "special_commands": []
     },
     "What's your date of birth?": {
         "actions": [
-            {"type": "textbox_fill", "name": "MM", "field": "Field2"},
-            {"type": "textbox_fill", "name": "DD", "field": "Field3"},
-            {"type": "textbox_fill", "name": "YYYY", "field": "Field4"},
-            {"type": "button_click", "name": "Next"}
-        ]
+            {"type": "textbox_fill", "field_name": "MM", "data_key": "Field2"},
+            {"type": "textbox_fill", "field_name": "DD", "data_key": "Field3"},
+            {"type": "textbox_fill", "field_name": "YYYY", "data_key": "Field4"},
+            {"type": "button_click", "value": "Next"}
+        ],
+        "special_commands": []
     },
     "What's your gender?": {
         "actions": [
-            {"type": "button_click", "name": "Female"}
-        ]
+            {"type": "button_click", "value": "Female"}
+        ],
+        "special_commands": []
     },
     "What's your credit score?": {
         "actions": [
-            {"type": "button_click", "name": "Excellent (720+)"}
-        ]
+            {"type": "button_click", "value": "Excellent (720+)"}
+        ],
+        "special_commands": []
     }
 }
 
