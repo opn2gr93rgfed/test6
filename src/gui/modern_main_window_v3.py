@@ -697,7 +697,7 @@ class ModernAppV3(ctk.CTk):
         network_patterns_entry = ctk.CTkEntry(
             timeouts_frame,
             textvariable=self.network_patterns_var,
-            placeholder_text="validate, api/submit, quotes",
+            placeholder_text="validate:external_id,user_id; quotes:price",
             width=200,
             font=(ModernTheme.FONT['family'], 11)
         )
@@ -705,7 +705,7 @@ class ModernAppV3(ctk.CTk):
 
         ctk.CTkLabel(
             timeouts_frame,
-            text="паттерны через запятую (захват данных из Network)",
+            text="pattern:field1,field2 (добавятся как колонки в CSV)",
             font=(ModernTheme.FONT['family'], 9),
             text_color=self.theme['text_secondary']
         ).grid(row=5, column=3, padx=(5, 15), pady=10, sticky="w")
@@ -1056,6 +1056,46 @@ class ModernAppV3(ctk.CTk):
     # ГЕНЕРАЦИЯ СКРИПТА
     # ========================================================================
 
+    def _parse_network_patterns(self, patterns_str: str) -> list:
+        """
+        Парсит паттерны Network Capture в новом формате
+
+        Формат: pattern:field1,field2; pattern2:field3
+        Примеры:
+            - "validate:external_id,user_id" → [{'pattern': 'validate', 'fields': ['external_id', 'user_id']}]
+            - "validate:external_id; quotes:price" → [..., ...]
+            - "validate" → [{'pattern': 'validate', 'fields': []}]  # без полей = весь response
+
+        Returns:
+            List[Dict] с ключами 'pattern' и 'fields'
+        """
+        if not patterns_str or not patterns_str.strip():
+            return []
+
+        result = []
+        # Разделяем по точке с запятой (разные паттерны)
+        pattern_groups = [p.strip() for p in patterns_str.split(';') if p.strip()]
+
+        for group in pattern_groups:
+            if ':' in group:
+                # Формат: pattern:field1,field2
+                pattern, fields_str = group.split(':', 1)
+                pattern = pattern.strip()
+                fields = [f.strip() for f in fields_str.split(',') if f.strip()]
+                result.append({
+                    'pattern': pattern,
+                    'fields': fields
+                })
+            else:
+                # Старый формат: просто pattern (без полей)
+                pattern = group.strip()
+                result.append({
+                    'pattern': pattern,
+                    'fields': []
+                })
+
+        return result
+
     def generate_playwright_script(self):
         """Генерация Playwright скрипта"""
         print("[DEBUG] generate_playwright_script() вызван")  # DEBUG
@@ -1088,8 +1128,8 @@ class ModernAppV3(ctk.CTk):
                 'typing_delay': int(self.typing_delay_var.get()) if self.typing_delay_var.get().isdigit() else 100,
                 # 🔥 МНОГОПОТОЧНОСТЬ
                 'threads_count': int(self.threads_count_var.get()) if self.threads_count_var.get().isdigit() else 1,
-                # 🌐 NETWORK CAPTURE
-                'network_capture_patterns': [p.strip() for p in self.network_patterns_var.get().split(',') if p.strip()]
+                # 🌐 NETWORK CAPTURE - парсинг нового формата pattern:field1,field2
+                'network_capture_patterns': self._parse_network_patterns(self.network_patterns_var.get())
             }
 
             print(f"[DEBUG] API Token: {config['api_token'][:10]}..." if config['api_token'] else "[DEBUG] API Token: пуст")  # DEBUG

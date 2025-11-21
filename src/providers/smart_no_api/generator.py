@@ -1485,33 +1485,51 @@ def load_csv_data() -> List[Dict]:
 
         return "action"
 
-    def _generate_main_iteration(self, user_code: str, network_capture_patterns: List[str] = None) -> str:
+    def _generate_main_iteration(self, user_code: str, network_capture_patterns: List = None) -> str:
         # Clean user code from Playwright Recorder boilerplate
         cleaned_code = self._clean_user_code(user_code)
 
         # 🌐 Generate network response capture code if patterns are provided
         network_capture_code = ""
-        if network_capture_patterns:
+        csv_append_code = ""
+
+        if network_capture_patterns and len(network_capture_patterns) > 0:
             patterns_str = json.dumps(network_capture_patterns, ensure_ascii=False)
             network_capture_code = f'''
     # ============================================================
-    # 🌐 ЗАХВАТ NETWORK RESPONSES (Developer Tools)
+    # 🌐 ЗАХВАТ NETWORK RESPONSES (Developer Tools) + ИЗВЛЕЧЕНИЕ ПОЛЕЙ
     # ============================================================
     captured_data = {{}}
-    capture_patterns = {patterns_str}
+    extracted_fields = {{}}  # Словарь для извлеченных полей: {{field_name: value}}
+    capture_patterns_config = {patterns_str}
+
+    def get_nested_value(data, field_path):
+        """Извлекает значение по пути field.subfield.subsubfield"""
+        keys = field_path.split('.')
+        value = data
+        for key in keys:
+            if isinstance(value, dict) and key in value:
+                value = value[key]
+            else:
+                return None
+        return value
 
     def handle_response(response):
-        """Обработчик network responses - перехватывает данные из Developer Tools"""
+        """Обработчик network responses - перехватывает данные и извлекает указанные поля"""
         try:
             url = response.url
-            # Проверяем, содержит ли URL один из паттернов
-            for pattern in capture_patterns:
+            # Проверяем каждый паттерн из конфига
+            for pattern_config in capture_patterns_config:
+                pattern = pattern_config.get('pattern', '')
+                fields = pattern_config.get('fields', [])
+
                 if pattern.lower() in url.lower():
                     print(f"[NETWORK_CAPTURE] Перехвачен ответ: {{url}}", flush=True)
                     try:
                         # Получаем JSON данные из ответа
                         json_data = response.json()
-                        # Сохраняем данные по паттерну
+
+                        # Сохраняем полные данные для отладки
                         if pattern not in captured_data:
                             captured_data[pattern] = []
                         captured_data[pattern].append({{
@@ -1519,8 +1537,21 @@ def load_csv_data() -> List[Dict]:
                             'status': response.status,
                             'data': json_data
                         }})
-                        print(f"[NETWORK_CAPTURE] Данные сохранены для паттерна '{{pattern}}'", flush=True)
-                        print(f"[NETWORK_CAPTURE] Preview: {{str(json_data)[:200]}}...", flush=True)
+
+                        # 🔥 ИЗВЛЕЧЕНИЕ КОНКРЕТНЫХ ПОЛЕЙ
+                        if fields:
+                            print(f"[NETWORK_CAPTURE] Извлекаю поля: {{fields}}", flush=True)
+                            for field in fields:
+                                field_value = get_nested_value(json_data, field)
+                                if field_value is not None:
+                                    extracted_fields[field] = field_value
+                                    print(f"[NETWORK_CAPTURE]   {{field}} = {{field_value}}", flush=True)
+                                else:
+                                    print(f"[NETWORK_CAPTURE]   {{field}} не найдено в response", flush=True)
+                        else:
+                            # Если полей нет - сохраняем весь response
+                            print(f"[NETWORK_CAPTURE] Полный response сохранен для '{{pattern}}'", flush=True)
+                            print(f"[NETWORK_CAPTURE] Preview: {{str(json_data)[:200]}}...", flush=True)
                     except Exception as e:
                         print(f"[NETWORK_CAPTURE] Не удалось распарсить JSON: {{e}}", flush=True)
                     break
@@ -1530,7 +1561,53 @@ def load_csv_data() -> List[Dict]:
 
     # Регистрируем обработчик для всех network responses
     page.on("response", handle_response)
-    print("[NETWORK_CAPTURE] Обработчик зарегистрирован. Паттерны:", capture_patterns, flush=True)
+    print("[NETWORK_CAPTURE] Обработчик зарегистрирован", flush=True)
+    print(f"[NETWORK_CAPTURE] Паттерны и поля: {{capture_patterns_config}}", flush=True)
+'''
+
+            # 🔥 ГЕНЕРАЦИЯ КОДА ДОБАВЛЕНИЯ В CSV
+            csv_append_code = '''
+        # 🌐 Добавление извлеченных полей в CSV
+        if extracted_fields:
+            print(f"\\n[CSV_APPEND] Добавляю извлеченные поля в CSV...", flush=True)
+            try:
+                csv_path = 'data.csv'  # Путь к CSV файлу
+
+                # Читаем существующий CSV
+                import csv
+                import os
+
+                if os.path.exists(csv_path):
+                    with open(csv_path, 'r', encoding='utf-8') as f:
+                        reader = csv.DictReader(f)
+                        rows = list(reader)
+                        headers = reader.fieldnames if reader.fieldnames else []
+
+                    # Добавляем новые заголовки для извлеченных полей (если их еще нет)
+                    new_headers = list(headers)
+                    for field_name in extracted_fields.keys():
+                        if field_name not in new_headers:
+                            new_headers.append(field_name)
+                            print(f"[CSV_APPEND] Добавлена новая колонка: {field_name}", flush=True)
+
+                    # Обновляем текущую строку (iteration_number - 1, т.к. индекс с 0)
+                    row_index = iteration_number - 1
+                    if 0 <= row_index < len(rows):
+                        for field_name, field_value in extracted_fields.items():
+                            rows[row_index][field_name] = str(field_value)
+                            print(f"[CSV_APPEND] Строка {iteration_number}: {field_name} = {field_value}", flush=True)
+
+                    # Записываем обновленный CSV
+                    with open(csv_path, 'w', encoding='utf-8', newline='') as f:
+                        writer = csv.DictWriter(f, fieldnames=new_headers)
+                        writer.writeheader()
+                        writer.writerows(rows)
+
+                    print(f"[CSV_APPEND] ✅ CSV обновлен: {len(extracted_fields)} полей добавлено", flush=True)
+                else:
+                    print(f"[CSV_APPEND] ⚠️ CSV файл не найден: {csv_path}", flush=True)
+            except Exception as e:
+                print(f"[CSV_APPEND] ❌ Ошибка записи в CSV: {e}", flush=True)
 '''
 
         return f'''# ============================================================
@@ -1555,7 +1632,7 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
         # ДЕЙСТВИЯ ПОЛЬЗОВАТЕЛЯ (очищены от Playwright boilerplate)
         # ============================================================
 {self._indent_code(cleaned_code, 8)}
-
+{csv_append_code}
         # 🌐 Вывод захваченных данных (если есть)
         if 'captured_data' in locals() and captured_data:
             print(f"\\n[NETWORK_CAPTURE] === ИТОГОВЫЕ ДАННЫЕ ===")
