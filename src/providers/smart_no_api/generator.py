@@ -1387,19 +1387,19 @@ def process_task(task_data: tuple) -> Dict:
 
 def main():
     """Главная функция запуска через Octobrowser API с многопоточностью"""
-    print("[MAIN] 🚀 Запуск автоматизации через Octobrowser API...")
+    print("[MAIN] Запуск автоматизации через Octobrowser API...")
     print(f"[MAIN] API Token: {API_TOKEN[:10]}..." if API_TOKEN else "[MAIN] [!] API Token отсутствует!")
-    print(f"[MAIN] 🧵 Потоков: {THREADS_COUNT}")
+    print(f"[MAIN] Потоков: {THREADS_COUNT}")
 
     # Прокси информация
     if USE_PROXY_LIST:
-        print(f"[MAIN] 🌐 ПРОКСИ: {len(PROXY_LIST)} прокси, режим ротации: {PROXY_ROTATION_MODE}")
+        print(f"[MAIN] ПРОКСИ: {len(PROXY_LIST)} прокси, режим ротации: {PROXY_ROTATION_MODE}")
         for i, proxy in enumerate(PROXY_LIST, 1):
             proxy_dict = parse_proxy_string(proxy)
             if proxy_dict:
                 print(f"[MAIN]    {i}. {proxy_dict['type']}://{proxy_dict['host']}:{proxy_dict['port']}")
     elif USE_PROXY:
-        print(f"[MAIN] 🌐 ПРОКСИ (одиночный): {PROXY_TYPE}://{PROXY_HOST}:{PROXY_PORT}")
+        print(f"[MAIN] ПРОКСИ (одиночный): {PROXY_TYPE}://{PROXY_HOST}:{PROXY_PORT}")
     else:
         print("[MAIN] [!] ПРОКСИ НЕ ВКЛЮЧЕН!")
 
@@ -1411,13 +1411,13 @@ def main():
 
     # Загрузка CSV
     csv_data = load_csv_data()
-    print(f"[MAIN] 📊 Загружено {len(csv_data)} строк данных")
+    print(f"[MAIN] Загружено {len(csv_data)} строк данных")
 
     if not csv_data:
         print("[ERROR] Нет данных для обработки")
         return
 
-    # 🔥 ПОДГОТОВКА ЗАДАЧ ДЛЯ ПОТОКОВ
+    # Подготовка задач для потоков
     tasks = []
     for iteration_number, data_row in enumerate(csv_data, 1):
         # thread_id будет назначен при выполнении
@@ -1426,10 +1426,10 @@ def main():
         task_data = (thread_id, iteration_number, data_row, len(csv_data))
         tasks.append(task_data)
 
-    print(f"\\n[MAIN] ⚡ Запуск {len(tasks)} задач в {THREADS_COUNT} потоках...")
+    print(f"\\n[MAIN] Запуск {len(tasks)} задач в {THREADS_COUNT} потоках...")
     print(f"[MAIN] {'='*60}")
 
-    # 🔥 ЗАПУСК МНОГОПОТОЧНОЙ ОБРАБОТКИ
+    # Запуск многопоточной обработки
     success_count = 0
     fail_count = 0
     results = []
@@ -1447,25 +1447,25 @@ def main():
 
                 if result['success']:
                     success_count += 1
-                    print(f"[MAIN] ✅ Итерация {result['iteration']} завершена успешно")
+                    print(f"[MAIN] [OK] Итерация {result['iteration']} завершена успешно")
                 else:
                     fail_count += 1
-                    print(f"[MAIN] ❌ Итерация {result['iteration']} завершена с ошибкой: {result.get('error', 'Unknown')}")
+                    print(f"[MAIN] [ERROR] Итерация {result['iteration']} завершена с ошибкой: {result.get('error', 'Unknown')}")
 
             except Exception as e:
                 fail_count += 1
-                print(f"[MAIN] ❌ Ошибка выполнения задачи: {e}")
+                print(f"[MAIN] [ERROR] Ошибка выполнения задачи: {e}")
                 import traceback
                 traceback.print_exc()
 
     # Итоговая статистика
     print(f"\\n{'='*60}")
-    print(f"[MAIN] 🏁 ЗАВЕРШЕНО")
-    print(f"[MAIN] ✅ Успешно: {success_count}/{len(csv_data)}")
-    print(f"[MAIN] ❌ Ошибок: {fail_count}/{len(csv_data)}")
-    print(f"[MAIN] 🧵 Использовано потоков: {THREADS_COUNT}")
+    print(f"[MAIN] ЗАВЕРШЕНО")
+    print(f"[MAIN] Успешно: {success_count}/{len(csv_data)}")
+    print(f"[MAIN] Ошибок: {fail_count}/{len(csv_data)}")
+    print(f"[MAIN] Использовано потоков: {THREADS_COUNT}")
     if USE_PROXY_LIST:
-        print(f"[MAIN] 🌐 Использовано прокси: {len(PROXY_LIST)} ({PROXY_ROTATION_MODE})")
+        print(f"[MAIN] Использовано прокси: {len(PROXY_LIST)} ({PROXY_ROTATION_MODE})")
     print(f"{'='*60}")
 
 
