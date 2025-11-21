@@ -564,9 +564,9 @@ def find_question_in_pool(question_text: str, pool: Dict, debug: bool = False) -
 
         # Частичное совпадение - pool_key содержится в question_text или наоборот
         if normalized_key in normalized_question or normalized_question in normalized_key:
-            # Проверяем что это действительно похожие вопросы (>70% совпадение длины)
+            # Проверяем что это действительно похожие вопросы (>55% совпадение длины)
             len_ratio = min(len(normalized_key), len(normalized_question)) / max(len(normalized_key), len(normalized_question))
-            if len_ratio > 0.7:
+            if len_ratio > 0.55:
                 if debug:
                     print(f"[SEARCH] [OK] НАЙДЕНО (частичное, ratio={len_ratio:.2f}): '{pool_key}'")
                 return pool_key
@@ -651,13 +651,10 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
                 # Первая попытка - обычный поиск
                 pool_key = find_question_in_pool(question_text, QUESTIONS_POOL, debug=False)
 
-                # DEBUG: показываем результат поиска
-                if answered_count == 0:
-                    print(f"[DYNAMIC_QA] [DEBUG] find_question_in_pool('{question_text}') -> {pool_key}")
-
-                # Если не нашли - повторяем с debug
-                if not pool_key and answered_count == 0:
-                    print(f"\n[DYNAMIC_QA] [DEBUG] Не смог найти первый вопрос, включаю детальный поиск...")
+                # Если не нашли - повторяем с debug для диагностики
+                if not pool_key:
+                    print(f"\n[DYNAMIC_QA] [DEBUG] Вопрос не найден в пуле, включаю детальный поиск...")
+                    print(f"[DYNAMIC_QA] [DEBUG] Вопрос на странице: '{question_text}'")
                     pool_key = find_question_in_pool(question_text, QUESTIONS_POOL, debug=True)
 
                 if pool_key:
@@ -723,8 +720,15 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
 
                     print(f"[DYNAMIC_QA] [OK] Вопрос обработан ({answered_count}/{max_questions})")
 
-                    # Пауза для загрузки следующего вопроса
-                    time.sleep(1.5)
+                    # Пауза для загрузки следующего вопроса (увеличена до 3 сек)
+                    print(f"[DYNAMIC_QA] Ожидание загрузки следующего вопроса (3 сек)...")
+                    time.sleep(3)
+
+                    # Попробовать дождаться изменения DOM (новый вопрос)
+                    try:
+                        page.wait_for_load_state("domcontentloaded", timeout=2000)
+                    except:
+                        pass  # Игнорируем таймаут - продолжаем
 
                     # Выйти из цикла headings и искать новые вопросы
                     break
