@@ -863,6 +863,53 @@ def load_csv_data() -> List[Dict]:
         # Wrap all actions in resilient try-except blocks for dynamic flows
         return self._wrap_actions_for_resilience(cleaned_code)
 
+    def _add_timeout_to_action(self, code: str, timeout_ms: int = 15000) -> str:
+        """
+        Добавить явный timeout к Playwright действию
+
+        Добавляет timeout=15000 (или другое значение) к методам действий.
+        Это позволяет для #optional действий использовать короткий таймаут
+        вместо долгих retry с прогрессивными задержками.
+
+        Args:
+            code: Строка кода Playwright (например, page.click())
+            timeout_ms: Таймаут в миллисекундах (по умолчанию 15000 = 15 сек)
+
+        Returns:
+            Код с добавленным timeout параметром
+
+        Examples:
+            page.click() → page.click(timeout=15000)
+            page.fill("text") → page.fill("text", timeout=15000)
+            page.click(force=True) → page.click(force=True, timeout=15000)
+        """
+        import re
+
+        # Find the last method call in the chain (click, fill, press, etc.)
+        # Pattern: method_name( ... )
+        pattern = r'(\.(click|fill|press|type|check|uncheck|select_option|set_checked))\(([^)]*)\)'
+
+        def add_timeout(match):
+            method = match.group(1)  # .click, .fill, etc.
+            params = match.group(3).strip()  # existing parameters
+
+            # If there are existing parameters, add timeout as additional param
+            if params:
+                return f"{method}({params}, timeout={timeout_ms})"
+            else:
+                return f"{method}(timeout={timeout_ms})"
+
+        # Replace the last occurrence only (rightmost method in chain)
+        # Find all matches
+        matches = list(re.finditer(pattern, code))
+        if matches:
+            # Replace only the last match
+            last_match = matches[-1]
+            modified = add_timeout(last_match)
+            code = code[:last_match.start()] + modified + code[last_match.end():]
+
+        return code
+
     def _replace_fill_with_typing(self, code: str) -> str:
         """
         Замена .fill() на .press_sequentially() для симуляции человеческого ввода
@@ -1125,6 +1172,10 @@ def load_csv_data() -> List[Dict]:
 
                 # 🔥 Replace .fill() with .press_sequentially() for human typing simulation
                 sanitized_code = self._replace_fill_with_typing(sanitized_code)
+
+                # 🔥 Add explicit short timeout for optional actions (originally marked with #optional)
+                # This adds timeout=15000 (15 seconds) to the action call
+                sanitized_code = self._add_timeout_to_action(sanitized_code, timeout_ms=15000)
 
                 wrapped_lines.append(f"{indent_str}try:")
                 wrapped_lines.append(f"{indent_str}    {sanitized_code}")
