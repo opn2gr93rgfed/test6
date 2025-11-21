@@ -27,6 +27,7 @@ class Generator:
         proxy_list_config = config.get('proxy_list', {})  # 🔥 СПИСОК ПРОКСИ
         profile_config = config.get('profile', {})
         threads_count = config.get('threads_count', 1)  # 🔥 МНОГОПОТОЧНОСТЬ
+        network_capture_patterns = config.get('network_capture_patterns', [])  # 🌐 ПАТТЕРНЫ ДЛЯ ЗАХВАТА NETWORK RESPONSES
 
         # 🔥 СИМУЛЯЦИЯ ВВОДА ТЕКСТА
         self.simulate_typing = config.get('simulate_typing', True)
@@ -38,7 +39,7 @@ class Generator:
         script += self._generate_octobrowser_functions(profile_config)  # Убрал proxy_config - теперь прокси выбирается динамически
         script += self._generate_helpers()
         script += self._generate_csv_loader()
-        script += self._generate_main_iteration(user_code)
+        script += self._generate_main_iteration(user_code, network_capture_patterns)  # 🌐 Передаем паттерны
         script += self._generate_worker_function()  # 🔥 WORKER ФУНКЦИЯ ДЛЯ ПОТОКОВ
         script += self._generate_main_function()  # 🔥 ОБНОВЛЕННАЯ MAIN С МНОГОПОТОЧНОСТЬЮ
 
@@ -1484,9 +1485,53 @@ def load_csv_data() -> List[Dict]:
 
         return "action"
 
-    def _generate_main_iteration(self, user_code: str) -> str:
+    def _generate_main_iteration(self, user_code: str, network_capture_patterns: List[str] = None) -> str:
         # Clean user code from Playwright Recorder boilerplate
         cleaned_code = self._clean_user_code(user_code)
+
+        # 🌐 Generate network response capture code if patterns are provided
+        network_capture_code = ""
+        if network_capture_patterns:
+            patterns_str = json.dumps(network_capture_patterns, ensure_ascii=False)
+            network_capture_code = f'''
+    # ============================================================
+    # 🌐 ЗАХВАТ NETWORK RESPONSES (Developer Tools)
+    # ============================================================
+    captured_data = {{}}
+    capture_patterns = {patterns_str}
+
+    def handle_response(response):
+        """Обработчик network responses - перехватывает данные из Developer Tools"""
+        try:
+            url = response.url
+            # Проверяем, содержит ли URL один из паттернов
+            for pattern in capture_patterns:
+                if pattern.lower() in url.lower():
+                    print(f"[NETWORK_CAPTURE] Перехвачен ответ: {{url}}", flush=True)
+                    try:
+                        # Получаем JSON данные из ответа
+                        json_data = response.json()
+                        # Сохраняем данные по паттерну
+                        if pattern not in captured_data:
+                            captured_data[pattern] = []
+                        captured_data[pattern].append({{
+                            'url': url,
+                            'status': response.status,
+                            'data': json_data
+                        }})
+                        print(f"[NETWORK_CAPTURE] Данные сохранены для паттерна '{{pattern}}'", flush=True)
+                        print(f"[NETWORK_CAPTURE] Preview: {{str(json_data)[:200]}}...", flush=True)
+                    except Exception as e:
+                        print(f"[NETWORK_CAPTURE] Не удалось распарсить JSON: {{e}}", flush=True)
+                    break
+        except Exception as e:
+            # Игнорируем ошибки при обработке - не должны ломать основной флоу
+            pass
+
+    # Регистрируем обработчик для всех network responses
+    page.on("response", handle_response)
+    print("[NETWORK_CAPTURE] Обработчик зарегистрирован. Паттерны:", capture_patterns, flush=True)
+'''
 
         return f'''# ============================================================
 # ОСНОВНАЯ ФУНКЦИЯ ИТЕРАЦИИ
@@ -1505,11 +1550,21 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
     print(f"[ITERATION {{iteration_number}}] Начало")
     print(f"{'='*60}")
 
-    try:
+    try:{network_capture_code}
         # ============================================================
         # ДЕЙСТВИЯ ПОЛЬЗОВАТЕЛЯ (очищены от Playwright boilerplate)
         # ============================================================
 {self._indent_code(cleaned_code, 8)}
+
+        # 🌐 Вывод захваченных данных (если есть)
+        if 'captured_data' in locals() and captured_data:
+            print(f"\\n[NETWORK_CAPTURE] === ИТОГОВЫЕ ДАННЫЕ ===")
+            for pattern, entries in captured_data.items():
+                print(f"[NETWORK_CAPTURE] Паттерн '{{pattern}}': {{len(entries)}} ответов")
+                for i, entry in enumerate(entries, 1):
+                    print(f"[NETWORK_CAPTURE]   {{i}}. URL: {{entry['url']}}")
+                    print(f"[NETWORK_CAPTURE]      Status: {{entry['status']}}")
+                    print(f"[NETWORK_CAPTURE]      Data keys: {{list(entry['data'].keys()) if isinstance(entry['data'], dict) else 'Not a dict'}}")
 
         print(f"[ITERATION {{iteration_number}}] [OK] Завершено успешно")
         return True
