@@ -836,10 +836,11 @@ def find_question_in_pool(question_text: str, pool: Dict, debug: bool = False) -
 
     if debug:
         print(f"[SEARCH] [FAIL] НЕ НАЙДЕНО")
-        print(f"[SEARCH] Доступные ключи в пуле (первые 5):")
-        for i, key in enumerate(list(pool.keys())[:5]):
+        print(f"[SEARCH] Доступные ключи в пуле (всего {len(pool)}):")
+        # Показываем ВСЕ вопросы, чтобы увидеть что в пуле
+        for i, key in enumerate(list(pool.keys()), 1):
             normalized = normalize_text(key)
-            print(f"[SEARCH]   {i+1}. '{key}' -> '{normalized}'")
+            print(f"[SEARCH]   {i}. '{key}' -> '{normalized}'")
 
     return None
 
@@ -870,11 +871,11 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
     print(f"\\n[DYNAMIC_QA] Начинаю поиск вопросов на странице...")
     print(f"[DYNAMIC_QA] В пуле доступно {len(QUESTIONS_POOL)} вопросов")
 
-    # DEBUG: показываем первые 5 вопросов ИЗ ПУЛА
-    print(f"[DYNAMIC_QA] [DEBUG] Первые 5 вопросов в пуле:")
-    for i, (key, value) in enumerate(list(QUESTIONS_POOL.items())[:5]):
+    # DEBUG: показываем ВСЕ вопросы ИЗ ПУЛА (чтобы видеть все что распарсилось)
+    print(f"[DYNAMIC_QA] [DEBUG] Все вопросы в пуле:")
+    for i, (key, value) in enumerate(list(QUESTIONS_POOL.items()), 1):
         actions_count = len(value.get('actions', []))
-        print(f"[DYNAMIC_QA]   {i+1}. '{key}' (действий: {actions_count})")
+        print(f"[DYNAMIC_QA]   {i}. '{key}' (действий: {actions_count})")
 
     # Цикл поиска и ответа на вопросы
     while answered_count < max_questions:
