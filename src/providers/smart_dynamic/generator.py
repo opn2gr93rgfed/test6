@@ -713,17 +713,26 @@ def scroll_to_element(page, selector, by_role=None, name=None, by_test_id=None, 
         try:
             if by_test_id:
                 element = page.get_by_test_id(by_test_id).first
+                print(f"[SCROLL_SEARCH] [DEBUG] Ищу по test_id='{by_test_id}'")
             elif by_role:
                 element = page.get_by_role(by_role, name=name).first
+                print(f"[SCROLL_SEARCH] [DEBUG] Ищу по role='{by_role}', name='{name}'")
             else:
                 element = page.locator(selector).first
+                print(f"[SCROLL_SEARCH] [DEBUG] Ищу по selector='{selector}'")
 
+            print(f"[SCROLL_SEARCH] [DEBUG] Проверяю is_visible(timeout=5000)...")
             if element.is_visible(timeout=5000):
+                print(f"[SCROLL_SEARCH] [DEBUG] is_visible() = True, элемент НАЙДЕН!")
                 # Прокрутить к элементу
                 element.scroll_into_view_if_needed(timeout=2000)
                 time.sleep(0.5)
                 return True
-        except:
+            else:
+                print(f"[SCROLL_SEARCH] [DEBUG] is_visible() = False, элемент не виден")
+                return False
+        except Exception as e:
+            print(f"[SCROLL_SEARCH] [DEBUG] Exception: {type(e).__name__}: {str(e)[:100]}")
             pass
         return False
 
