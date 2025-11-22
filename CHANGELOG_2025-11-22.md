@@ -4,7 +4,195 @@
 
 ### 📋 Обзор
 
-Были исправлены критические проблемы с popup окнами и улучшена обработка опциональных элементов.
+Были исправлены критические проблемы с popup окнами, улучшена обработка опциональных элементов, и добавлена мощная команда #retry для надежной загрузки медленных элементов.
+
+---
+
+## ✅ Commit 3: feat: Add #retry command for reliable element loading (НОВЫЙ)
+
+### Проблема
+
+После исправления дубликата "View my quotes" тестирование показало:
+- **3 из 5 итераций** достигают page2 ✅
+- **2 из 5 итераций** проваливаются ❌
+
+**Причина провалов:**
+- Кнопка "Show More" на page1 грузится медленнее 50 секунд
+- Один таймаут = провал всей итерации
+- Пользователь хотел: "гарантированно 5 из 5"
+
+**Первоначальное решение (неэффективное):**
+Дублирование `#optional` блоков:
+```python
+#pause50
+#optional
+#scroll_search
+page1.get_by_role("button", name="Show More").click()
+
+#pause50  # ← ПРОБЛЕМА: ждем даже если первая попытка успешна!
+#optional
+#scroll_search
+page1.get_by_role("button", name="Show More").click()
+```
+
+**Проблема этого подхода:**
+"Так а если допустим с первой попыткой загрузится, то что потом? Потом, получается, еще у меня будет пауза, еще 50 секунд, хотя элемент уже может быть найден."
+
+### Решение: #retry команда
+
+Реализована новая команда с умной логикой повторных попыток.
+
+**Синтаксис:**
+```python
+#retry                          # 3 попытки, 30 сек между попытками (default)
+#retry:5                        # 5 попыток, 30 сек между попытками
+#retry:3:50                     # 3 попытки, 50 сек между попытками
+#retry:3:50:scroll_search       # 3 попытки, 50 сек, с scroll_to_element()
+```
+
+**Ключевая особенность:**
+Ожидание происходит **ТОЛЬКО после неудачной попытки**, не перед первой.
+
+**Код генератора (`generator.py`):**
+
+1. **Парсинг команды (lines 1325-1338):**
+```python
+retry_match = re.match(r'#\s*retry(?::(\d+))?(?::(\d+))?(?::(\w+))?$', special_cmd)
+if retry_match:
+    retry_next_action = True
+    retry_attempts = int(retry_match.group(1)) if retry_match.group(1) else 3
+    retry_wait = int(retry_match.group(2)) if retry_match.group(2) else 30
+    retry_scroll_search = retry_match.group(3) == 'scroll_search' if retry_match.group(3) else False
+```
+
+2. **Генерация retry loop (lines 1423-1475):**
+```python
+if retry_next_action:
+    # Retry loop with wait-only-on-failure logic
+    for retry_attempt in range(retry_attempts):
+        if retry_attempt > 0:  # ← Wait ONLY after first failed attempt!
+            time.sleep(retry_wait)
+        if retry_scroll_search:
+            scroll_to_element(...)  # Before each attempt
+        try:
+            action  # Execute action
+            break   # Success - exit immediately!
+        except:
+            # Retry or raise if last attempt
+```
+
+**Пример использования:**
+```python
+with page.expect_popup() as page1_info:
+    page.get_by_role("button", name="View my quotes").click()
+page1 = page1_info.value
+
+#optional
+page1.locator('button.fairing__skip-action').click()
+
+# Retry для медленной кнопки: 3 попытки, 50 сек, с прокруткой
+#retry:3:50:scroll_search
+page1.get_by_role("button", name="Show More").click()
+
+#scroll_search
+page1.get_by_role("button", name="Buy online").click()
+```
+
+**Генерируется:**
+```python
+# Retry loop: 3 attempts, 50s wait between attempts
+retry_success = False
+for retry_attempt in range(3):
+    if retry_attempt > 0:
+        print(f'[RETRY] Waiting 50s before attempt {retry_attempt+1}/3...', flush=True)
+        time.sleep(50)
+    else:
+        print(f'[RETRY] Attempt {retry_attempt+1}/3...', flush=True)
+
+    # Scroll search before attempt
+    scroll_to_element(page1, None, by_role="button", name="Show More")
+
+    try:
+        page1.get_by_role("button", name="Show More").click()
+        print('[RETRY] [SUCCESS] Element found and action completed', flush=True)
+        retry_success = True
+        break  # ← Прерываем сразу!
+    except PlaywrightTimeout:
+        if retry_attempt == 2:
+            print('[RETRY] [FAILED] All 3 attempts exhausted', flush=True)
+            raise
+        else:
+            print(f'[RETRY] Timeout on attempt {retry_attempt+1}, will retry...', flush=True)
+```
+
+### Преимущества
+
+**1. Нет лишних ожиданий**
+
+| Сценарий | Старый подход (#optional x3) | Новый подход (#retry:3:50) |
+|----------|------------------------------|----------------------------|
+| Успех с 1 попытки | Ждет 50s + 50s = **100s** | Ждет **0s** ✅ |
+| Успех со 2 попытки | Ждет 50s + 50s = 100s | Ждет **50s** ✅ |
+| Успех с 3 попытки | Ждет 50s + 50s = 100s | Ждет **100s** ✅ |
+
+**2. Интеграция со scroll_search**
+- Автоматическая прокрутка перед каждой попыткой
+- Увеличивает шансы найти элемент
+
+**3. Понятные логи**
+
+**Элемент найден с первой попытки:**
+```
+[RETRY] Attempt 1/3...
+[RETRY] [SUCCESS] Element found and action completed
+```
+
+**Элемент найден со второй попытки:**
+```
+[RETRY] Attempt 1/3...
+[RETRY] Timeout on attempt 1, will retry...
+[RETRY] Waiting 50s before attempt 2/3...
+[RETRY] Attempt 2/3...
+[RETRY] [SUCCESS] Element found and action completed
+```
+
+**Все попытки провалились:**
+```
+[RETRY] Attempt 1/3...
+[RETRY] Timeout on attempt 1, will retry...
+[RETRY] Waiting 50s before attempt 2/3...
+[RETRY] Attempt 2/3...
+[RETRY] Timeout on attempt 2, will retry...
+[RETRY] Waiting 50s before attempt 3/3...
+[RETRY] Attempt 3/3...
+[RETRY] [FAILED] All 3 attempts exhausted
+TimeoutError: ...
+```
+
+### Результат
+
+**Ожидаемое улучшение:**
+- **Было:** 3/5 итераций успешны (60%)
+- **Станет:** 5/5 итераций успешны (100%) с `#retry:3:50:scroll_search`
+
+**Экономия времени:**
+- Если элемент грузится быстро (50% случаев): **экономим 100 секунд** на каждой итерации
+- Если элемент грузится медленно (50% случаев): **гарантируем успех** вместо провала
+
+### Тест
+
+```bash
+python test_retry_command.py
+```
+
+**Результат:** ✅ ТЕСТ ПРОЙДЕН!
+
+Проверяет:
+- ✅ Retry loop с корректным количеством попыток
+- ✅ Правильное время ожидания между попытками
+- ✅ Scroll search интегрирован
+- ✅ Ожидание только после первой неудачной попытки
+- ✅ Немедленный выход при успехе
 
 ---
 

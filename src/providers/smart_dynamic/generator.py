@@ -1240,6 +1240,10 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
         with_block_indent = 0
         scroll_next_action = False  # Флаг для #scroll_search
         optional_next_action = False  # Флаг для #optional
+        retry_next_action = False  # Флаг для #retry
+        retry_attempts = 3  # Количество попыток для #retry
+        retry_wait = 30  # Время ожидания между попытками (сек)
+        retry_scroll_search = False  # Использовать ли scroll_search в retry
 
         while i < len(lines):
             line = lines[i]
@@ -1315,6 +1319,21 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
                 if special_cmd == '#optional':
                     optional_next_action = True
                     result_lines.append(f"{indent_str}# Optional element (may not be present)")
+                    i += 1
+                    continue
+
+                # #retry - повторять попытки найти элемент с ожиданием между попытками
+                # Синтаксис: #retry или #retry:N или #retry:N:S или #retry:N:S:scroll_search
+                # N - количество попыток (default: 3)
+                # S - секунды ожидания между попытками (default: 30)
+                # scroll_search - использовать scroll_to_element (опционально)
+                retry_match = re.match(r'#\s*retry(?::(\d+))?(?::(\d+))?(?::(\w+))?$', special_cmd)
+                if retry_match:
+                    retry_next_action = True
+                    retry_attempts = int(retry_match.group(1)) if retry_match.group(1) else 3
+                    retry_wait = int(retry_match.group(2)) if retry_match.group(2) else 30
+                    retry_scroll_search = retry_match.group(3) == 'scroll_search' if retry_match.group(3) else False
+                    result_lines.append(f"{indent_str}# Retry enabled: {retry_attempts} attempts, {retry_wait}s wait{', with scroll_search' if retry_scroll_search else ''}")
                     i += 1
                     continue
 
@@ -1400,8 +1419,61 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
                     result_lines.append(f"{indent_str}            raise")
                     result_lines.append(f"{indent_str}        print(f'[RETRY] Timeout, retrying...', flush=True)")
                 else:
-                    # Действия вне with блока - optional, простой try-except
-                    if optional_next_action:
+                    # Действия вне with блока - retry, optional, или простой try-except
+                    if retry_next_action:
+                        # RETRY ЛОГИКА с ожиданием между попытками
+                        # Парсим действие для определения page и селектора (для scroll_search)
+                        page_var = 'page'
+                        if 'page1.' in stripped:
+                            page_var = 'page1'
+                        elif 'page2.' in stripped:
+                            page_var = 'page2'
+                        elif 'page3.' in stripped:
+                            page_var = 'page3'
+
+                        result_lines.append(f"{indent_str}# Retry loop: {retry_attempts} attempts, {retry_wait}s wait between attempts")
+                        result_lines.append(f"{indent_str}retry_success = False")
+                        result_lines.append(f"{indent_str}for retry_attempt in range({retry_attempts}):")
+                        result_lines.append(f"{indent_str}    if retry_attempt > 0:")
+                        result_lines.append(f"{indent_str}        print(f'[RETRY] Waiting {retry_wait}s before attempt {{retry_attempt+1}}/{retry_attempts}...', flush=True)")
+                        result_lines.append(f"{indent_str}        time.sleep({retry_wait})")
+                        result_lines.append(f"{indent_str}    else:")
+                        result_lines.append(f"{indent_str}        print(f'[RETRY] Attempt {{retry_attempt+1}}/{retry_attempts}...', flush=True)")
+
+                        # Добавляем scroll_to_element если retry_scroll_search=True
+                        if retry_scroll_search:
+                            if 'get_by_role(' in stripped:
+                                role_match = re.search(r'get_by_role\("(\w+)"\s*,\s*name="([^"]+)"', stripped)
+                                if role_match:
+                                    role = role_match.group(1)
+                                    name = role_match.group(2)
+                                    result_lines.append(f"{indent_str}    # Scroll search before attempt")
+                                    result_lines.append(f'{indent_str}    scroll_to_element({page_var}, None, by_role="{role}", name="{name}")')
+                            elif 'locator(' in stripped:
+                                selector_match = re.search(r"locator\(['\"]([^'\"]+)['\"]\)", stripped)
+                                if not selector_match:
+                                    selector_match = re.search(r'locator\("([^"]+)"\)', stripped)
+                                if selector_match:
+                                    selector = selector_match.group(1)
+                                    selector = selector.replace('"', '\\"')
+                                    result_lines.append(f"{indent_str}    # Scroll search before attempt")
+                                    result_lines.append(f'{indent_str}    scroll_to_element({page_var}, "{selector}")')
+
+                        result_lines.append(f"{indent_str}    try:")
+                        result_lines.append(f"{indent_str}        {stripped}")
+                        result_lines.append(f"{indent_str}        print('[RETRY] [SUCCESS] Element found and action completed', flush=True)")
+                        result_lines.append(f"{indent_str}        retry_success = True")
+                        result_lines.append(f"{indent_str}        break")
+                        result_lines.append(f"{indent_str}    except PlaywrightTimeout:")
+                        result_lines.append(f"{indent_str}        if retry_attempt == {retry_attempts} - 1:")
+                        result_lines.append(f"{indent_str}            print('[RETRY] [FAILED] All {retry_attempts} attempts exhausted', flush=True)")
+                        result_lines.append(f"{indent_str}            raise")
+                        result_lines.append(f"{indent_str}        else:")
+                        result_lines.append(f"{indent_str}            print(f'[RETRY] Timeout on attempt {{retry_attempt+1}}, will retry...', flush=True)")
+
+                        retry_next_action = False  # Сбрасываем флаг
+                        retry_scroll_search = False  # Сбрасываем флаг scroll_search
+                    elif optional_next_action:
                         # Более понятные сообщения для опциональных элементов
                         result_lines.append(f"{indent_str}print('[OPTIONAL] Trying optional element...', flush=True)")
                         result_lines.append(f"{indent_str}try:")

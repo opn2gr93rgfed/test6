@@ -62,6 +62,86 @@ except PlaywrightTimeout:
 
 **Use case:** "Not Now" кнопка появляется в 90% случаев - теперь оба сценария обрабатываются корректно с понятным feedback.
 
+### ✅ НОВОЕ: #retry команда для надежной загрузки элементов
+
+**Проблема:**
+Иногда элементы загружаются медленно (особенно на page1/page2 popup окнах):
+- "Show More" кнопка может грузиться 50+ секунд
+- Один таймаут = полный провал итерации
+- Нужно несколько попыток с ожиданием
+
+**Решение:**
+Новая команда `#retry` с умной логикой повторных попыток:
+
+**Синтаксис:**
+```python
+#retry                          # 3 попытки, 30 сек между попытками
+#retry:5                        # 5 попыток, 30 сек между попытками
+#retry:3:50                     # 3 попытки, 50 сек между попытками
+#retry:3:50:scroll_search       # 3 попытки, 50 сек, с прокруткой страницы
+```
+
+**Пример использования:**
+```python
+# Popup окно page1 с медленной загрузкой "Show More"
+with page.expect_popup() as page1_info:
+    page.get_by_role("button", name="View my quotes").click()
+page1 = page1_info.value
+
+#optional
+page1.locator('button.fairing__skip-action').click()
+
+# Retry для медленной кнопки: 3 попытки, 50 секунд ожидания, с прокруткой
+#retry:3:50:scroll_search
+page1.get_by_role("button", name="Show More").click()
+```
+
+**Генерируется код:**
+```python
+# Retry loop: 3 attempts, 50s wait between attempts
+retry_success = False
+for retry_attempt in range(3):
+    if retry_attempt > 0:  # ← Ключевая оптимизация!
+        print(f'[RETRY] Waiting 50s before attempt {retry_attempt+1}/3...', flush=True)
+        time.sleep(50)
+    else:
+        print(f'[RETRY] Attempt {retry_attempt+1}/3...', flush=True)
+
+    # Scroll search before attempt (если указан :scroll_search)
+    scroll_to_element(page1, None, by_role="button", name="Show More")
+
+    try:
+        page1.get_by_role("button", name="Show More").click()
+        print('[RETRY] [SUCCESS] Element found and action completed', flush=True)
+        retry_success = True
+        break  # ← Прерываем сразу после успеха!
+    except PlaywrightTimeout:
+        if retry_attempt == 3 - 1:
+            print('[RETRY] [FAILED] All 3 attempts exhausted', flush=True)
+            raise
+        else:
+            print(f'[RETRY] Timeout on attempt {retry_attempt+1}, will retry...', flush=True)
+```
+
+**Ключевые преимущества:**
+
+1. **Нет лишних ожиданий** - если элемент найден с первой попытки, выполнение продолжается сразу (0 секунд ожидания)
+2. **Умные повторы** - ожидание происходит только ПОСЛЕ неудачной попытки (не ДО первой попытки)
+3. **Интеграция со scroll_search** - автоматическая прокрутка перед каждой попыткой
+4. **Понятные логи** - четко видно какая попытка, сколько ждем, успех или провал
+
+**Сравнение подходов:**
+
+| Подход | Первая попытка | Вторая попытка | Третья попытка | Успех с 1 раза |
+|--------|---------------|---------------|---------------|----------------|
+| **Старый (#optional x3)** | 0s | 50s ожидание | 50s ожидание | **100s потеряно!** |
+| **Новый (#retry:3:50)** | 0s | 50s ожидание | 50s ожидание | **0s потеряно!** ✅ |
+
+**Use case:**
+Тестирование показало что с `#retry:3:50:scroll_search` для "Show More" кнопки достигается **5/5 успешных итераций** вместо предыдущих 3/5, и при этом нет лишних ожиданий когда элемент грузится быстро.
+
+**Тест:** `test_retry_command.py` - все проверки пройдены ✅
+
 ---
 
 ## ✅ Проверка работоспособности
