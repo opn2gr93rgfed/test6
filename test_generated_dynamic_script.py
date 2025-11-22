@@ -302,6 +302,55 @@ def wait_for_navigation(page, timeout=30000):
         return False
 
 
+def scroll_to_element(page, selector, by_role=None, name=None, max_scrolls=10):
+    """
+    Скроллит страницу вниз пока не найдет элемент
+
+    Args:
+        page: Playwright page
+        selector: CSS selector (если by_role=None)
+        by_role: Тип роли (button, heading, textbox)
+        name: Имя элемента для get_by_role
+        max_scrolls: Максимум скроллов
+
+    Returns:
+        True если элемент найден, False если нет
+    """
+    print(f"[SCROLL_SEARCH] Ищу элемент с прокруткой...")
+
+    for scroll_attempt in range(max_scrolls):
+        try:
+            # Проверяем наличие элемента
+            if by_role:
+                element = page.get_by_role(by_role, name=name).first
+            else:
+                element = page.locator(selector).first
+
+            # Пробуем получить элемент с коротким таймаутом
+            if element.is_visible(timeout=1000):
+                print(f"[SCROLL_SEARCH] [OK] Элемент найден после {scroll_attempt} прокруток")
+                # Прокрутить к элементу
+                element.scroll_into_view_if_needed(timeout=2000)
+                time.sleep(0.5)
+                return True
+        except:
+            pass  # Элемент не найден, продолжаем
+
+        # Скроллим вниз
+        current_scroll = page.evaluate('window.pageYOffset')
+        page.evaluate('window.scrollBy(0, window.innerHeight * 0.8)')  # Скролл на 80% высоты экрана
+        time.sleep(0.5)
+
+        # Проверяем достигли ли конца страницы
+        new_scroll = page.evaluate('window.pageYOffset')
+        if new_scroll == current_scroll:
+            print(f"[SCROLL_SEARCH] [!] Достигнут конец страницы, элемент не найден")
+            return False
+
+    print(f"[SCROLL_SEARCH] [!] Элемент не найден после {max_scrolls} прокруток")
+    return False
+
+
 def execute_special_command(command: str, page, data_row: Dict):
     """
     Выполнить специальную команду (#pause, #scroll, etc.)
@@ -851,7 +900,9 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
         print(f'[PAUSE] Waiting 40 seconds...', flush=True)
         time.sleep(40)
         #optional
-        #scroll_search
+        # Scroll search enabled for next action
+        # Scroll search for element
+        scroll_to_element(page1, None, by_role="button", name="Show More")
         try:
             page1.get_by_role("button", name="Show More").click()
         except PlaywrightTimeout:

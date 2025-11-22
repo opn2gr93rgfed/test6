@@ -1126,6 +1126,8 @@ class ModernAppV3(ctk.CTk):
                 # 🔥 СИМУЛЯЦИЯ ВВОДА ТЕКСТА
                 'simulate_typing': self.simulate_typing_var.get(),
                 'typing_delay': int(self.typing_delay_var.get()) if self.typing_delay_var.get().isdigit() else 100,
+                # 🔥 ЗАДЕРЖКА МЕЖДУ ДЕЙСТВИЯМИ (КЛИКИ, ЗАПОЛНЕНИЯ)
+                'action_delay': float(self.action_delay_var.get()) if self.action_delay_var.get().replace('.', '', 1).isdigit() else 0.5,
                 # 🔥 МНОГОПОТОЧНОСТЬ
                 'threads_count': int(self.threads_count_var.get()) if self.threads_count_var.get().isdigit() else 1,
                 # 🌐 NETWORK CAPTURE - парсинг нового формата pattern:field1,field2

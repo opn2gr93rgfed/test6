@@ -53,6 +53,9 @@ class Generator:
         self.simulate_typing = config.get('simulate_typing', True)
         self.typing_delay = config.get('typing_delay', 100)
 
+        # Задержка между действиями (клики, заполнения)
+        self.action_delay = config.get('action_delay', 0.5)
+
         # ПАРСИНГ: Извлекаем вопросы и действия из user_code
         questions_pool, pre_questions_code, post_questions_code = self._parse_user_code(user_code)
 
@@ -112,6 +115,34 @@ class Generator:
             if 'with page.expect_popup()' in stripped or '= page1_info.value' in stripped:
                 in_post_section = True
                 in_questions_section = False
+
+                # Проверяем следующую строку в with блоке на наличие .click()
+                # Если последнее действие текущего вопроса - клик по той же кнопке,
+                # то удаляем его из вопроса (он должен быть внутри with блока)
+                if current_question and current_actions and 'with page.expect_popup()' in stripped:
+                    # Ищем следующую непустую строку (элемент внутри with блока)
+                    next_line_idx = i + 1
+                    while next_line_idx < len(lines) and not lines[next_line_idx].strip():
+                        next_line_idx += 1
+
+                    if next_line_idx < len(lines):
+                        next_line = lines[next_line_idx].strip()
+
+                        # Извлекаем имя кнопки из with блока
+                        button_in_with = None
+                        if 'get_by_role("button"' in next_line or "get_by_role('button'" in next_line:
+                            match = re.search(r'get_by_role\(["\']button["\']\s*,\s*name=["\']([^"\']+)["\']', next_line)
+                            if match:
+                                button_in_with = match.group(1)
+
+                        # Проверяем последнюю строку текущего вопроса
+                        if button_in_with and current_actions:
+                            last_action = current_actions[-1].strip()
+                            if '.click()' in last_action and button_in_with in last_action:
+                                # Удаляем последнее действие из вопроса - оно дублируется
+                                print(f"[PARSER] DEBUG: Удаляю дубликат клика '{button_in_with}' из вопроса '{current_question}'")
+                                current_actions = current_actions[:-1]
+
                 # Сохраняем текущий вопрос если есть
                 if current_question and current_actions:
                     questions_pool[current_question] = self._parse_actions(current_actions)
@@ -128,27 +159,43 @@ class Generator:
                 elif '= page3_info.value' in stripped:
                     page_context = 'page3'
 
+                # Добавляем .click() если его нет внутри with блока
+                # Playwright Recorder иногда записывает без .click()
+                if ('get_by_role("button"' in stripped or "get_by_role('button'" in stripped) and '.click()' not in stripped:
+                    # Проверяем, что это внутри with блока (предыдущая строка содержит with page.expect_popup)
+                    if i > 0 and 'with page.expect_popup()' in lines[i-1]:
+                        # Добавляем .click() к строке
+                        fixed_line = line.rstrip() + '.click()'
+                        post_questions_lines.append(fixed_line)
+                        continue
+
                 post_questions_lines.append(line)
                 continue
 
             # Обнаружение heading (вопроса)
+            # ВАЖНО: Если у heading есть .click() - это НЕ маркер вопроса, а действие!
             if 'get_by_role("heading"' in stripped or "get_by_role('heading'" in stripped:
-                # Сохранить предыдущий вопрос если был
-                if current_question and current_actions:
-                    questions_pool[current_question] = self._parse_actions(current_actions)
+                # Если у heading есть .click() - это кликабельный элемент, обрабатываем как обычное действие
+                if '.click()' in stripped:
+                    # Это действие, не маркер вопроса - обрабатываем ниже как обычную строку
+                    pass  # Продолжаем обработку ниже
+                else:
+                    # Сохранить предыдущий вопрос если был
+                    if current_question and current_actions:
+                        questions_pool[current_question] = self._parse_actions(current_actions)
 
-                # Извлечь текст нового вопроса (улучшенный парсинг с поддержкой апострофов)
-                # Сначала пробуем двойные кавычки
-                match = re.search(r'get_by_role\("heading"\s*,\s*name="([^"]+)"', stripped)
-                if not match:
-                    # Затем одинарные кавычки
-                    match = re.search(r"get_by_role\('heading'\s*,\s*name='([^']+)'", stripped)
+                    # Извлечь текст нового вопроса (улучшенный парсинг с поддержкой апострофов)
+                    # Сначала пробуем двойные кавычки
+                    match = re.search(r'get_by_role\("heading"\s*,\s*name="([^"]+)"', stripped)
+                    if not match:
+                        # Затем одинарные кавычки
+                        match = re.search(r"get_by_role\('heading'\s*,\s*name='([^']+)'", stripped)
 
-                if match:
-                    current_question = match.group(1)
-                    current_actions = []
-                    in_questions_section = True
-                continue
+                    if match:
+                        current_question = match.group(1)
+                        current_actions = []
+                        in_questions_section = True
+                    continue
 
             # Если мы в секции вопросов, собираем действия
             if in_questions_section and current_question:
@@ -639,6 +686,132 @@ def wait_for_navigation(page, timeout=30000):
         return False
 
 
+def scroll_to_element(page, selector, by_role=None, name=None, by_test_id=None, max_duration_seconds=180):
+    """
+    Циклически скроллит страницу вниз-вверх-вниз-вверх пока не найдет элемент
+
+    Подходит для динамически подгружаемых элементов, которые появляются при скролле.
+    Можно использовать как замену #retry для элементов требующих скролла.
+
+    Args:
+        page: Playwright page
+        selector: CSS selector (если by_role=None и by_test_id=None)
+        by_role: Тип роли (button, heading, textbox)
+        name: Имя элемента для get_by_role
+        by_test_id: Test ID элемента для get_by_test_id
+        max_duration_seconds: Максимальное время поиска в секундах (по умолчанию 180 = 3 минуты)
+
+    Returns:
+        True если элемент найден, False если нет
+    """
+    print(f"[SCROLL_SEARCH] Ищу элемент с циклическим скроллом (max {max_duration_seconds}s)...")
+
+    start_time = time.time()
+
+    def check_element_visible():
+        """Проверяет видимость элемента"""
+        try:
+            if by_test_id:
+                element = page.get_by_test_id(by_test_id).first
+            elif by_role:
+                element = page.get_by_role(by_role, name=name).first
+            else:
+                element = page.locator(selector).first
+
+            if element.is_visible(timeout=1000):
+                # Прокрутить к элементу
+                element.scroll_into_view_if_needed(timeout=2000)
+                time.sleep(0.5)
+                return True
+        except:
+            pass
+        return False
+
+    def is_time_expired():
+        """Проверяет не истекло ли время"""
+        elapsed = time.time() - start_time
+        if elapsed >= max_duration_seconds:
+            print(f"[SCROLL_SEARCH] [!] Превышен лимит времени ({elapsed:.1f}s / {max_duration_seconds}s)")
+            return True
+        return False
+
+    # 1. Проверяем элемент на текущей позиции
+    if check_element_visible():
+        print(f"[SCROLL_SEARCH] [OK] Элемент найден на текущей позиции")
+        return True
+
+    scroll_count = 0
+    cycle = 0
+
+    # 2. ЦИКЛИЧЕСКИЙ ПОИСК: вниз → вверх → вниз → вверх...
+    while not is_time_expired():
+        cycle += 1
+        elapsed = time.time() - start_time
+        print(f"[SCROLL_SEARCH] === Цикл {cycle} (время: {elapsed:.1f}s / {max_duration_seconds}s) ===")
+
+        # 2.1. Скроллим ВНИЗ до конца страницы
+        print(f"[SCROLL_SEARCH] Скроллю вниз...")
+        max_down_scrolls = 30  # Максимум попыток вниз
+        for _ in range(max_down_scrolls):
+            if is_time_expired():
+                break
+
+            current_scroll = page.evaluate('window.pageYOffset')
+            page.evaluate('window.scrollBy(0, window.innerHeight * 0.8)')  # Скролл на 80% высоты экрана
+            time.sleep(0.5)
+            scroll_count += 1
+
+            # Проверяем элемент
+            if check_element_visible():
+                elapsed = time.time() - start_time
+                print(f"[SCROLL_SEARCH] [OK] Элемент найден после {scroll_count} прокруток за {elapsed:.1f}s (цикл {cycle}, вниз)")
+                return True
+
+            # Проверяем достигли ли конца страницы
+            new_scroll = page.evaluate('window.pageYOffset')
+            if new_scroll == current_scroll:
+                print(f"[SCROLL_SEARCH] Достигнут конец страницы")
+                break
+
+        if is_time_expired():
+            break
+
+        # 2.2. Скроллим ВВЕРХ до начала страницы
+        print(f"[SCROLL_SEARCH] Скроллю вверх...")
+        max_up_scrolls = 30  # Максимум попыток вверх
+        for _ in range(max_up_scrolls):
+            if is_time_expired():
+                break
+
+            current_scroll = page.evaluate('window.pageYOffset')
+
+            # Скроллим вверх
+            page.evaluate('window.scrollBy(0, -window.innerHeight * 0.8)')  # Скролл вверх
+            time.sleep(0.5)
+            scroll_count += 1
+
+            # Проверяем элемент
+            if check_element_visible():
+                elapsed = time.time() - start_time
+                print(f"[SCROLL_SEARCH] [OK] Элемент найден после {scroll_count} прокруток за {elapsed:.1f}s (цикл {cycle}, вверх)")
+                return True
+
+            # Проверяем достигли ли начала страницы
+            new_scroll = page.evaluate('window.pageYOffset')
+            if new_scroll == current_scroll or new_scroll <= 0:
+                print(f"[SCROLL_SEARCH] Достигнуто начало страницы")
+                break
+
+        # Пауза между циклами (чтобы дать элементу время загрузиться)
+        if not is_time_expired():
+            print(f"[SCROLL_SEARCH] Пауза 2 сек перед следующим циклом...")
+            time.sleep(2)
+
+    elapsed = time.time() - start_time
+    print(f"[SCROLL_SEARCH] [!] Элемент не найден после {scroll_count} прокруток за {elapsed:.1f}s ({cycle} циклов)")
+    return False
+
+
 def execute_special_command(command: str, page, data_row: Dict):
     """
     Выполнить специальную команду (#pause, #scroll, etc.)
@@ -651,7 +824,7 @@ def execute_special_command(command: str, page, data_row: Dict):
     command = command.strip().lower()
 
     # #pause10, #pause5, etc.
-    pause_match = re.match(r'#\\s*pause\\s*(\\d+)', command)
+    pause_match = re.match(r'#\s*pause\s*(\d+)', command)
     if pause_match:
         seconds = int(pause_match.group(1))
         print(f'[PAUSE] Waiting {seconds} seconds...', flush=True)
@@ -943,7 +1116,7 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
                                 button_text = action.get('value')
                                 print(f"[DYNAMIC_QA]   -> Кликаю кнопку: {button_text}")
                                 page.get_by_role("button", name=button_text).click(timeout=10000)
-                                time.sleep(0.5)
+                                time.sleep({self.action_delay})
 
                             # Заполнение текстового поля
                             elif action_type == 'textbox_fill':
@@ -956,22 +1129,22 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
                                 print(f"[DYNAMIC_QA]   -> Заполняю поле '{field_name}': {value}")
                                 textbox = page.get_by_role("textbox", name=field_name).first
                                 textbox.click(timeout=5000)
-                                textbox.fill(value, timeout=5000)
-                                time.sleep(0.3)
+                                textbox.press_sequentially(value, delay={self.typing_delay})
+                                time.sleep({self.action_delay})
 
                             # Нажатие клавиши
                             elif action_type == 'press_key':
                                 key = action.get('key')
                                 print(f"[DYNAMIC_QA]   -> Нажимаю клавишу: {key}")
                                 page.keyboard.press(key)
-                                time.sleep(0.2)
+                                time.sleep({self.action_delay})
 
                             # Клик по locator
                             elif action_type == 'locator_click':
                                 selector = action.get('selector')
                                 print(f"[DYNAMIC_QA]   -> Кликаю элемент: {selector[:50]}...")
                                 page.locator(selector).first.click(timeout=10000)
-                                time.sleep(0.5)
+                                time.sleep({self.action_delay})
 
                         except Exception as e:
                             print(f"[DYNAMIC_QA]   [ERROR] Не удалось выполнить действие: {e}")
@@ -1120,8 +1293,9 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
             # Пропускаем пустые
             if not stripped:
                 continue
-            # Пропускаем heading (они уже в QUESTIONS_POOL)
-            if 'get_by_role("heading"' in stripped or "get_by_role('heading'" in stripped:
+            # Пропускаем heading БЕЗ .click() (они маркеры вопросов в QUESTIONS_POOL)
+            # Но heading С .click() - это кликабельные элементы, их НЕ пропускаем
+            if ('get_by_role("heading"' in stripped or "get_by_role('heading'" in stripped) and '.click()' not in stripped:
                 continue
 
             # Убираем базовый indent для нормализации
@@ -1151,6 +1325,12 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
         i = 0
         inside_with_block = False
         with_block_indent = 0
+        scroll_next_action = False  # Флаг для #scroll_search
+        optional_next_action = False  # Флаг для #optional
+        retry_next_action = False  # Флаг для #retry
+        retry_attempts = 3  # Количество попыток для #retry
+        retry_wait = 30  # Время ожидания между попытками (сек)
+        retry_scroll_search = False  # Использовать ли scroll_search в retry
 
         while i < len(lines):
             line = lines[i]
@@ -1215,6 +1395,35 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
                     i += 1
                     continue
 
+                # #scroll_search - флаг для следующего действия
+                if special_cmd == '#scroll_search':
+                    scroll_next_action = True
+                    result_lines.append(f"{indent_str}# Scroll search enabled for next action")
+                    i += 1
+                    continue
+
+                # #optional - следующее действие опциональное (может не быть на странице)
+                if special_cmd == '#optional':
+                    optional_next_action = True
+                    result_lines.append(f"{indent_str}# Optional element (may not be present)")
+                    i += 1
+                    continue
+
+                # #retry - повторять попытки найти элемент с ожиданием между попытками
+                # Синтаксис: #retry или #retry:N или #retry:N:S или #retry:N:S:scroll_search
+                # N - количество попыток (default: 3)
+                # S - секунды ожидания между попытками (default: 30)
+                # scroll_search - использовать scroll_to_element (опционально)
+                retry_match = re.match(r'#\s*retry(?::(\d+))?(?::(\d+))?(?::(\w+))?$', special_cmd)
+                if retry_match:
+                    retry_next_action = True
+                    retry_attempts = int(retry_match.group(1)) if retry_match.group(1) else 3
+                    retry_wait = int(retry_match.group(2)) if retry_match.group(2) else 30
+                    retry_scroll_search = retry_match.group(3) == 'scroll_search' if retry_match.group(3) else False
+                    result_lines.append(f"{indent_str}# Retry enabled: {retry_attempts} attempts, {retry_wait}s wait{', with scroll_search' if retry_scroll_search else ''}")
+                    i += 1
+                    continue
+
                 # Неизвестная команда - оставляем как комментарий
                 result_lines.append(line)
                 i += 1
@@ -1243,6 +1452,49 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
                 # Получаем индент
                 indent_str = ' ' * current_indent
 
+                # Если установлен флаг scroll_next_action - добавляем scroll_to_element() перед действием
+                if scroll_next_action:
+                    # Парсим действие чтобы определить page, selector, role
+                    page_var = 'page'  # По умолчанию
+                    if 'page1.' in stripped:
+                        page_var = 'page1'
+                    elif 'page2.' in stripped:
+                        page_var = 'page2'
+                    elif 'page3.' in stripped:
+                        page_var = 'page3'
+
+                    # Определяем тип действия
+                    if 'get_by_test_id(' in stripped:
+                        # Извлекаем test_id
+                        test_id_match = re.search(r'get_by_test_id\(["\']([^"\']+)["\']\)', stripped)
+                        if test_id_match:
+                            test_id = test_id_match.group(1)
+                            result_lines.append(f"{indent_str}# Scroll search for element")
+                            result_lines.append(f'{indent_str}scroll_to_element({page_var}, None, by_test_id="{test_id}")')
+                    elif 'get_by_role(' in stripped:
+                        # Извлекаем роль и имя
+                        role_match = re.search(r'get_by_role\("(\w+)"\s*,\s*name="([^"]+)"', stripped)
+                        if role_match:
+                            role = role_match.group(1)
+                            name = role_match.group(2)
+                            result_lines.append(f"{indent_str}# Scroll search for element")
+                            result_lines.append(f'{indent_str}scroll_to_element({page_var}, None, by_role="{role}", name="{name}")')
+                    elif 'locator(' in stripped:
+                        # Извлекаем селектор (поддержка вложенных кавычек в xpath)
+                        # Пробуем одинарные кавычки с поддержкой экранирования
+                        selector_match = re.search(r"locator\('((?:[^'\\]|\\.)*)'\)", stripped)
+                        if not selector_match:
+                            # Пробуем двойные кавычки с поддержкой экранирования
+                            selector_match = re.search(r'locator\("((?:[^"\\]|\\.)*)"\)', stripped)
+                        if selector_match:
+                            selector = selector_match.group(1)
+                            # Экранируем кавычки в селекторе для генерации кода
+                            selector = selector.replace('\\', '\\\\').replace('"', '\\"')
+                            result_lines.append(f"{indent_str}# Scroll search for element")
+                            result_lines.append(f'{indent_str}scroll_to_element({page_var}, "{selector}")')
+
+                    scroll_next_action = False  # Сбрасываем флаг
+
                 # Действия внутри with блока критичны - нужен retry с прогрессивными задержками
                 if inside_with_block:
                     # RETRY ЛОГИКА для критичных действий (popup открытие, navigation)
@@ -1263,13 +1515,86 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
                     result_lines.append(f"{indent_str}            raise")
                     result_lines.append(f"{indent_str}        print(f'[RETRY] Timeout, retrying...', flush=True)")
                 else:
-                    # Действия вне with блока - optional, простой try-except
-                    result_lines.append(f"{indent_str}try:")
-                    result_lines.append(f"{indent_str}    {stripped}")
-                    result_lines.append(f"{indent_str}except PlaywrightTimeout:")
-                    result_lines.append(f'{indent_str}    print("[ACTION] [WARNING] Timeout - элемент не найден", flush=True)')
-                    result_lines.append(f'{indent_str}    print("[ACTION] [INFO] Продолжаем выполнение...", flush=True)')
-                    result_lines.append(f"{indent_str}    pass")
+                    # Действия вне with блока - retry, optional, или простой try-except
+                    if retry_next_action:
+                        # RETRY ЛОГИКА с ожиданием между попытками
+                        # Парсим действие для определения page и селектора (для scroll_search)
+                        page_var = 'page'
+                        if 'page1.' in stripped:
+                            page_var = 'page1'
+                        elif 'page2.' in stripped:
+                            page_var = 'page2'
+                        elif 'page3.' in stripped:
+                            page_var = 'page3'
+
+                        result_lines.append(f"{indent_str}# Retry loop: {retry_attempts} attempts, {retry_wait}s wait between attempts")
+                        result_lines.append(f"{indent_str}retry_success = False")
+                        result_lines.append(f"{indent_str}for retry_attempt in range({retry_attempts}):")
+                        result_lines.append(f"{indent_str}    if retry_attempt > 0:")
+                        result_lines.append(f"{indent_str}        print(f'[RETRY] Waiting {retry_wait}s before attempt {{retry_attempt+1}}/{retry_attempts}...', flush=True)")
+                        result_lines.append(f"{indent_str}        time.sleep({retry_wait})")
+                        result_lines.append(f"{indent_str}    else:")
+                        result_lines.append(f"{indent_str}        print(f'[RETRY] Attempt {{retry_attempt+1}}/{retry_attempts}...', flush=True)")
+
+                        # Добавляем scroll_to_element если retry_scroll_search=True
+                        if retry_scroll_search:
+                            if 'get_by_test_id(' in stripped:
+                                test_id_match = re.search(r'get_by_test_id\(["\']([^"\']+)["\']\)', stripped)
+                                if test_id_match:
+                                    test_id = test_id_match.group(1)
+                                    result_lines.append(f"{indent_str}    # Scroll search before attempt")
+                                    result_lines.append(f'{indent_str}    scroll_to_element({page_var}, None, by_test_id="{test_id}")')
+                            elif 'get_by_role(' in stripped:
+                                role_match = re.search(r'get_by_role\("(\w+)"\s*,\s*name="([^"]+)"', stripped)
+                                if role_match:
+                                    role = role_match.group(1)
+                                    name = role_match.group(2)
+                                    result_lines.append(f"{indent_str}    # Scroll search before attempt")
+                                    result_lines.append(f'{indent_str}    scroll_to_element({page_var}, None, by_role="{role}", name="{name}")')
+                            elif 'locator(' in stripped:
+                                # Извлекаем селектор (поддержка вложенных кавычек в xpath)
+                                selector_match = re.search(r"locator\('((?:[^'\\]|\\.)*)'\)", stripped)
+                                if not selector_match:
+                                    selector_match = re.search(r'locator\("((?:[^"\\]|\\.)*)"\)', stripped)
+                                if selector_match:
+                                    selector = selector_match.group(1)
+                                    # Экранируем кавычки в селекторе для генерации кода
+                                    selector = selector.replace('\\', '\\\\').replace('"', '\\"')
+                                    result_lines.append(f"{indent_str}    # Scroll search before attempt")
+                                    result_lines.append(f'{indent_str}    scroll_to_element({page_var}, "{selector}")')
+
+                        result_lines.append(f"{indent_str}    try:")
+                        result_lines.append(f"{indent_str}        {stripped}")
+                        result_lines.append(f"{indent_str}        print('[RETRY] [SUCCESS] Element found and action completed', flush=True)")
+                        result_lines.append(f"{indent_str}        retry_success = True")
+                        result_lines.append(f"{indent_str}        break")
+                        result_lines.append(f"{indent_str}    except PlaywrightTimeout:")
+                        result_lines.append(f"{indent_str}        if retry_attempt == {retry_attempts} - 1:")
+                        result_lines.append(f"{indent_str}            print('[RETRY] [FAILED] All {retry_attempts} attempts exhausted', flush=True)")
+                        result_lines.append(f"{indent_str}            raise")
+                        result_lines.append(f"{indent_str}        else:")
+                        result_lines.append(f"{indent_str}            print(f'[RETRY] Timeout on attempt {{retry_attempt+1}}, will retry...', flush=True)")
+
+                        retry_next_action = False  # Сбрасываем флаг
+                        retry_scroll_search = False  # Сбрасываем флаг scroll_search
+                    elif optional_next_action:
+                        # Более понятные сообщения для опциональных элементов
+                        result_lines.append(f"{indent_str}print('[OPTIONAL] Trying optional element...', flush=True)")
+                        result_lines.append(f"{indent_str}try:")
+                        result_lines.append(f"{indent_str}    {stripped}")
+                        result_lines.append(f"{indent_str}    print('[OPTIONAL] [OK] Element found and clicked', flush=True)")
+                        result_lines.append(f"{indent_str}except PlaywrightTimeout:")
+                        result_lines.append(f"{indent_str}    print('[OPTIONAL] [SKIP] Element not found (this is OK)', flush=True)")
+                        result_lines.append(f"{indent_str}    pass")
+                        optional_next_action = False  # Сбрасываем флаг
+                    else:
+                        # Обычные действия вне with блока
+                        result_lines.append(f"{indent_str}try:")
+                        result_lines.append(f"{indent_str}    {stripped}")
+                        result_lines.append(f"{indent_str}except PlaywrightTimeout:")
+                        result_lines.append(f'{indent_str}    print("[ACTION] [WARNING] Timeout - элемент не найден", flush=True)')
+                        result_lines.append(f'{indent_str}    print("[ACTION] [INFO] Продолжаем выполнение...", flush=True)')
+                        result_lines.append(f"{indent_str}    pass")
             else:
                 # Не действие - оставляем как есть
                 result_lines.append(line)
@@ -1300,6 +1625,12 @@ def process_task(task_data: tuple) -> Dict:
     print(f"\\n{'#'*60}")
     print(f"# THREAD {thread_id} | ROW {iteration_number}/{total_count}")
     print(f"{'#'*60}")
+
+    # Задержка для разнесения запусков Octobrowser (снижение нагрузки на систему)
+    startup_delay = (thread_id - 1) * 3  # 0s, 3s, 6s, 9s, 12s...
+    if startup_delay > 0:
+        print(f"[THREAD {thread_id}] Задержка запуска: {startup_delay}s (снижение нагрузки)")
+        time.sleep(startup_delay)
 
     profile_uuid = None
     result = {
