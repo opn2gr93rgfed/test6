@@ -112,6 +112,34 @@ class Generator:
             if 'with page.expect_popup()' in stripped or '= page1_info.value' in stripped:
                 in_post_section = True
                 in_questions_section = False
+
+                # Проверяем следующую строку в with блоке на наличие .click()
+                # Если последнее действие текущего вопроса - клик по той же кнопке,
+                # то удаляем его из вопроса (он должен быть внутри with блока)
+                if current_question and current_actions and 'with page.expect_popup()' in stripped:
+                    # Ищем следующую непустую строку (элемент внутри with блока)
+                    next_line_idx = i + 1
+                    while next_line_idx < len(lines) and not lines[next_line_idx].strip():
+                        next_line_idx += 1
+
+                    if next_line_idx < len(lines):
+                        next_line = lines[next_line_idx].strip()
+
+                        # Извлекаем имя кнопки из with блока
+                        button_in_with = None
+                        if 'get_by_role("button"' in next_line or "get_by_role('button'" in next_line:
+                            match = re.search(r'get_by_role\(["\']button["\']\s*,\s*name=["\']([^"\']+)["\']', next_line)
+                            if match:
+                                button_in_with = match.group(1)
+
+                        # Проверяем последнюю строку текущего вопроса
+                        if button_in_with and current_actions:
+                            last_action = current_actions[-1].strip()
+                            if '.click()' in last_action and button_in_with in last_action:
+                                # Удаляем последнее действие из вопроса - оно дублируется
+                                print(f"[PARSER] DEBUG: Удаляю дубликат клика '{button_in_with}' из вопроса '{current_question}'")
+                                current_actions = current_actions[:-1]
+
                 # Сохраняем текущий вопрос если есть
                 if current_question and current_actions:
                     questions_pool[current_question] = self._parse_actions(current_actions)
@@ -127,6 +155,16 @@ class Generator:
                     page_context = 'page2'
                 elif '= page3_info.value' in stripped:
                     page_context = 'page3'
+
+                # Добавляем .click() если его нет внутри with блока
+                # Playwright Recorder иногда записывает без .click()
+                if ('get_by_role("button"' in stripped or "get_by_role('button'" in stripped) and '.click()' not in stripped:
+                    # Проверяем, что это внутри with блока (предыдущая строка содержит with page.expect_popup)
+                    if i > 0 and 'with page.expect_popup()' in lines[i-1]:
+                        # Добавляем .click() к строке
+                        fixed_line = line.rstrip() + '.click()'
+                        post_questions_lines.append(fixed_line)
+                        continue
 
                 post_questions_lines.append(line)
                 continue
