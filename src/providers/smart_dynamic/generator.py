@@ -170,23 +170,29 @@ class Generator:
                 continue
 
             # Обнаружение heading (вопроса)
+            # ВАЖНО: Если у heading есть .click() - это НЕ маркер вопроса, а действие!
             if 'get_by_role("heading"' in stripped or "get_by_role('heading'" in stripped:
-                # Сохранить предыдущий вопрос если был
-                if current_question and current_actions:
-                    questions_pool[current_question] = self._parse_actions(current_actions)
+                # Если у heading есть .click() - это кликабельный элемент, обрабатываем как обычное действие
+                if '.click()' in stripped:
+                    # Это действие, не маркер вопроса - обрабатываем ниже как обычную строку
+                    pass  # Продолжаем обработку ниже
+                else:
+                    # Сохранить предыдущий вопрос если был
+                    if current_question and current_actions:
+                        questions_pool[current_question] = self._parse_actions(current_actions)
 
-                # Извлечь текст нового вопроса (улучшенный парсинг с поддержкой апострофов)
-                # Сначала пробуем двойные кавычки
-                match = re.search(r'get_by_role\("heading"\s*,\s*name="([^"]+)"', stripped)
-                if not match:
-                    # Затем одинарные кавычки
-                    match = re.search(r"get_by_role\('heading'\s*,\s*name='([^']+)'", stripped)
+                    # Извлечь текст нового вопроса (улучшенный парсинг с поддержкой апострофов)
+                    # Сначала пробуем двойные кавычки
+                    match = re.search(r'get_by_role\("heading"\s*,\s*name="([^"]+)"', stripped)
+                    if not match:
+                        # Затем одинарные кавычки
+                        match = re.search(r"get_by_role\('heading'\s*,\s*name='([^']+)'", stripped)
 
-                if match:
-                    current_question = match.group(1)
-                    current_actions = []
-                    in_questions_section = True
-                continue
+                    if match:
+                        current_question = match.group(1)
+                        current_actions = []
+                        in_questions_section = True
+                    continue
 
             # Если мы в секции вопросов, собираем действия
             if in_questions_section and current_question:
@@ -741,7 +747,7 @@ def execute_special_command(command: str, page, data_row: Dict):
     command = command.strip().lower()
 
     # #pause10, #pause5, etc.
-    pause_match = re.match(r'#\\s*pause\\s*(\\d+)', command)
+    pause_match = re.match(r'#\s*pause\s*(\d+)', command)
     if pause_match:
         seconds = int(pause_match.group(1))
         print(f'[PAUSE] Waiting {seconds} seconds...', flush=True)
@@ -1210,8 +1216,9 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
             # Пропускаем пустые
             if not stripped:
                 continue
-            # Пропускаем heading (они уже в QUESTIONS_POOL)
-            if 'get_by_role("heading"' in stripped or "get_by_role('heading'" in stripped:
+            # Пропускаем heading БЕЗ .click() (они маркеры вопросов в QUESTIONS_POOL)
+            # Но heading С .click() - это кликабельные элементы, их НЕ пропускаем
+            if ('get_by_role("heading"' in stripped or "get_by_role('heading'" in stripped) and '.click()' not in stripped:
                 continue
 
             # Убираем базовый indent для нормализации
