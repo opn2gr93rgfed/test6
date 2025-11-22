@@ -1619,6 +1619,12 @@ def process_task(task_data: tuple) -> Dict:
     print(f"# THREAD {thread_id} | ROW {iteration_number}/{total_count}")
     print(f"{'#'*60}")
 
+    # Задержка для разнесения запусков Octobrowser (снижение нагрузки на систему)
+    startup_delay = (thread_id - 1) * 3  # 0s, 3s, 6s, 9s, 12s...
+    if startup_delay > 0:
+        print(f"[THREAD {thread_id}] Задержка запуска: {startup_delay}s (снижение нагрузки)")
+        time.sleep(startup_delay)
+
     profile_uuid = None
     result = {
         'thread_id': thread_id,
