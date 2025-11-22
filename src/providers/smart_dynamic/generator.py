@@ -1239,6 +1239,7 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
         inside_with_block = False
         with_block_indent = 0
         scroll_next_action = False  # Флаг для #scroll_search
+        optional_next_action = False  # Флаг для #optional
 
         while i < len(lines):
             line = lines[i]
@@ -1307,6 +1308,13 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
                 if special_cmd == '#scroll_search':
                     scroll_next_action = True
                     result_lines.append(f"{indent_str}# Scroll search enabled for next action")
+                    i += 1
+                    continue
+
+                # #optional - следующее действие опциональное (может не быть на странице)
+                if special_cmd == '#optional':
+                    optional_next_action = True
+                    result_lines.append(f"{indent_str}# Optional element (may not be present)")
                     i += 1
                     continue
 
@@ -1393,12 +1401,24 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
                     result_lines.append(f"{indent_str}        print(f'[RETRY] Timeout, retrying...', flush=True)")
                 else:
                     # Действия вне with блока - optional, простой try-except
-                    result_lines.append(f"{indent_str}try:")
-                    result_lines.append(f"{indent_str}    {stripped}")
-                    result_lines.append(f"{indent_str}except PlaywrightTimeout:")
-                    result_lines.append(f'{indent_str}    print("[ACTION] [WARNING] Timeout - элемент не найден", flush=True)')
-                    result_lines.append(f'{indent_str}    print("[ACTION] [INFO] Продолжаем выполнение...", flush=True)')
-                    result_lines.append(f"{indent_str}    pass")
+                    if optional_next_action:
+                        # Более понятные сообщения для опциональных элементов
+                        result_lines.append(f"{indent_str}print('[OPTIONAL] Trying optional element...', flush=True)")
+                        result_lines.append(f"{indent_str}try:")
+                        result_lines.append(f"{indent_str}    {stripped}")
+                        result_lines.append(f"{indent_str}    print('[OPTIONAL] [OK] Element found and clicked', flush=True)")
+                        result_lines.append(f"{indent_str}except PlaywrightTimeout:")
+                        result_lines.append(f"{indent_str}    print('[OPTIONAL] [SKIP] Element not found (this is OK)', flush=True)")
+                        result_lines.append(f"{indent_str}    pass")
+                        optional_next_action = False  # Сбрасываем флаг
+                    else:
+                        # Обычные действия вне with блока
+                        result_lines.append(f"{indent_str}try:")
+                        result_lines.append(f"{indent_str}    {stripped}")
+                        result_lines.append(f"{indent_str}except PlaywrightTimeout:")
+                        result_lines.append(f'{indent_str}    print("[ACTION] [WARNING] Timeout - элемент не найден", flush=True)')
+                        result_lines.append(f'{indent_str}    print("[ACTION] [INFO] Продолжаем выполнение...", flush=True)')
+                        result_lines.append(f"{indent_str}    pass")
             else:
                 # Не действие - оставляем как есть
                 result_lines.append(line)
