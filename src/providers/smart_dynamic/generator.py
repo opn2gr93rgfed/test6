@@ -1114,6 +1114,8 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
                             # Клик по кнопке
                             if action_type == 'button_click':
                                 button_text = action.get('value')
+                                print(f"[DYNAMIC_QA]   -> Ищу кнопку: {button_text}")
+                                scroll_to_element(page, None, by_role="button", name=button_text, max_duration_seconds=30)
                                 print(f"[DYNAMIC_QA]   -> Кликаю кнопку: {button_text}")
                                 page.get_by_role("button", name=button_text).click(timeout=10000)
                                 time.sleep({self.action_delay})
@@ -1126,6 +1128,8 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
 
                                 value = data_row.get(data_key, static_value) if data_key else static_value
 
+                                print(f"[DYNAMIC_QA]   -> Ищу поле '{field_name}'")
+                                scroll_to_element(page, None, by_role="textbox", name=field_name, max_duration_seconds=30)
                                 print(f"[DYNAMIC_QA]   -> Заполняю поле '{field_name}': {value}")
                                 textbox = page.get_by_role("textbox", name=field_name).first
                                 textbox.click(timeout=5000)
@@ -1142,6 +1146,8 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
                             # Клик по locator
                             elif action_type == 'locator_click':
                                 selector = action.get('selector')
+                                print(f"[DYNAMIC_QA]   -> Ищу элемент: {selector[:50]}...")
+                                scroll_to_element(page, selector, max_duration_seconds=30)
                                 print(f"[DYNAMIC_QA]   -> Кликаю элемент: {selector[:50]}...")
                                 page.locator(selector).first.click(timeout=10000)
                                 time.sleep({self.action_delay})
