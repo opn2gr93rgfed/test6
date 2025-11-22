@@ -718,7 +718,7 @@ def scroll_to_element(page, selector, by_role=None, name=None, by_test_id=None, 
             else:
                 element = page.locator(selector).first
 
-            if element.is_visible(timeout=1000):
+            if element.is_visible(timeout=5000):
                 # Прокрутить к элементу
                 element.scroll_into_view_if_needed(timeout=2000)
                 time.sleep(0.5)
