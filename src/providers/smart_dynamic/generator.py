@@ -677,15 +677,16 @@ def wait_for_navigation(page, timeout=30000):
         return False
 
 
-def scroll_to_element(page, selector, by_role=None, name=None, max_scrolls=10):
+def scroll_to_element(page, selector, by_role=None, name=None, by_test_id=None, max_scrolls=10):
     """
     Скроллит страницу вниз пока не найдет элемент
 
     Args:
         page: Playwright page
-        selector: CSS selector (если by_role=None)
+        selector: CSS selector (если by_role=None и by_test_id=None)
         by_role: Тип роли (button, heading, textbox)
         name: Имя элемента для get_by_role
+        by_test_id: Test ID элемента для get_by_test_id
         max_scrolls: Максимум скроллов
 
     Returns:
@@ -696,7 +697,9 @@ def scroll_to_element(page, selector, by_role=None, name=None, max_scrolls=10):
     for scroll_attempt in range(max_scrolls):
         try:
             # Проверяем наличие элемента
-            if by_role:
+            if by_test_id:
+                element = page.get_by_test_id(by_test_id).first
+            elif by_role:
                 element = page.get_by_role(by_role, name=name).first
             else:
                 element = page.locator(selector).first
@@ -1377,7 +1380,14 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
                         page_var = 'page3'
 
                     # Определяем тип действия
-                    if 'get_by_role(' in stripped:
+                    if 'get_by_test_id(' in stripped:
+                        # Извлекаем test_id
+                        test_id_match = re.search(r'get_by_test_id\(["\']([^"\']+)["\']\)', stripped)
+                        if test_id_match:
+                            test_id = test_id_match.group(1)
+                            result_lines.append(f"{indent_str}# Scroll search for element")
+                            result_lines.append(f'{indent_str}scroll_to_element({page_var}, None, by_test_id="{test_id}")')
+                    elif 'get_by_role(' in stripped:
                         # Извлекаем роль и имя
                         role_match = re.search(r'get_by_role\("(\w+)"\s*,\s*name="([^"]+)"', stripped)
                         if role_match:
@@ -1442,7 +1452,13 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
 
                         # Добавляем scroll_to_element если retry_scroll_search=True
                         if retry_scroll_search:
-                            if 'get_by_role(' in stripped:
+                            if 'get_by_test_id(' in stripped:
+                                test_id_match = re.search(r'get_by_test_id\(["\']([^"\']+)["\']\)', stripped)
+                                if test_id_match:
+                                    test_id = test_id_match.group(1)
+                                    result_lines.append(f"{indent_str}    # Scroll search before attempt")
+                                    result_lines.append(f'{indent_str}    scroll_to_element({page_var}, None, by_test_id="{test_id}")')
+                            elif 'get_by_role(' in stripped:
                                 role_match = re.search(r'get_by_role\("(\w+)"\s*,\s*name="([^"]+)"', stripped)
                                 if role_match:
                                     role = role_match.group(1)
