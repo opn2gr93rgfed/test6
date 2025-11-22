@@ -1114,8 +1114,6 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
                             # Клик по кнопке
                             if action_type == 'button_click':
                                 button_text = action.get('value')
-                                print(f"[DYNAMIC_QA]   -> Ищу кнопку: {button_text}")
-                                scroll_to_element(page, None, by_role="button", name=button_text, max_duration_seconds=30)
                                 print(f"[DYNAMIC_QA]   -> Кликаю кнопку: {button_text}")
                                 page.get_by_role("button", name=button_text).click(timeout=10000)
                                 time.sleep({self.action_delay})
@@ -1128,8 +1126,6 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
 
                                 value = data_row.get(data_key, static_value) if data_key else static_value
 
-                                print(f"[DYNAMIC_QA]   -> Ищу поле '{field_name}'")
-                                scroll_to_element(page, None, by_role="textbox", name=field_name, max_duration_seconds=30)
                                 print(f"[DYNAMIC_QA]   -> Заполняю поле '{field_name}': {value}")
                                 textbox = page.get_by_role("textbox", name=field_name).first
                                 textbox.click(timeout=5000)
@@ -1146,8 +1142,6 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
                             # Клик по locator
                             elif action_type == 'locator_click':
                                 selector = action.get('selector')
-                                print(f"[DYNAMIC_QA]   -> Ищу элемент: {selector[:50]}...")
-                                scroll_to_element(page, selector, max_duration_seconds=30)
                                 print(f"[DYNAMIC_QA]   -> Кликаю элемент: {selector[:50]}...")
                                 page.locator(selector).first.click(timeout=10000)
                                 time.sleep({self.action_delay})
@@ -1322,7 +1316,6 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
         Добавляет обработку ошибок для Playwright действий
 
         Оборачивает клики, fill и другие действия в try-except или retry логику
-        НОВАЯ ФУНКЦИОНАЛЬНОСТЬ: Автоматически добавляет scroll_to_element() перед всеми действиями
         """
         if not code or not code.strip():
             return code
@@ -1338,8 +1331,6 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
         retry_attempts = 3  # Количество попыток для #retry
         retry_wait = 30  # Время ожидания между попытками (сек)
         retry_scroll_search = False  # Использовать ли scroll_search в retry
-        last_line_was_goto = False  # Флаг для отслеживания page.goto()
-        scroll_timeout = 180  # Дефолтный таймаут для scroll_to_element() в секундах
 
         while i < len(lines):
             line = lines[i]
@@ -1418,15 +1409,6 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
                     i += 1
                     continue
 
-                # #scroll_timeout - установить таймаут для scroll_to_element()
-                # Синтаксис: #scroll_timeout:N где N - секунды (например, #scroll_timeout:180)
-                scroll_timeout_match = re.match(r'#\s*scroll_timeout\s*:\s*(\d+)', special_cmd)
-                if scroll_timeout_match:
-                    scroll_timeout = int(scroll_timeout_match.group(1))
-                    result_lines.append(f"{indent_str}# Scroll timeout set to {scroll_timeout}s")
-                    i += 1
-                    continue
-
                 # #retry - повторять попытки найти элемент с ожиданием между попытками
                 # Синтаксис: #retry или #retry:N или #retry:N:S или #retry:N:S:scroll_search
                 # N - количество попыток (default: 3)
@@ -1470,22 +1452,8 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
                 # Получаем индент
                 indent_str = ' ' * current_indent
 
-                # Определяем является ли это heading (вопрос для динамического поиска)
-                is_heading_action = 'get_by_role("heading"' in stripped or "get_by_role('heading'" in stripped
-
-                # Определяем нужно ли автоматически добавить scroll_to_element()
-                # Авто-детекция НЕ работает если:
-                # 1. Внутри with блока (критичные действия для popup)
-                # 2. Сразу после page.goto() (элемент в начале страницы)
-                # 3. Уже установлен флаг scroll_next_action (явный #scroll_search)
-                # 4. Это heading элемент (используется для динамического поиска вопросов)
-                auto_scroll_enabled = (not inside_with_block and
-                                      not last_line_was_goto and
-                                      not scroll_next_action and
-                                      not is_heading_action)
-
                 # Если установлен флаг scroll_next_action - добавляем scroll_to_element() перед действием
-                if scroll_next_action or auto_scroll_enabled:
+                if scroll_next_action:
                     # Парсим действие чтобы определить page, selector, role
                     page_var = 'page'  # По умолчанию
                     if 'page1.' in stripped:
@@ -1495,28 +1463,22 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
                     elif 'page3.' in stripped:
                         page_var = 'page3'
 
-                    # Определяем комментарий в зависимости от источника
-                    if auto_scroll_enabled:
-                        scroll_comment = "# AUTO-SCROLL: Automatically scrolling to element"
-                    else:
-                        scroll_comment = "# Scroll search for element"
-
                     # Определяем тип действия
                     if 'get_by_test_id(' in stripped:
                         # Извлекаем test_id
                         test_id_match = re.search(r'get_by_test_id\(["\']([^"\']+)["\']\)', stripped)
                         if test_id_match:
                             test_id = test_id_match.group(1)
-                            result_lines.append(f"{indent_str}{scroll_comment}")
-                            result_lines.append(f'{indent_str}scroll_to_element({page_var}, None, by_test_id="{test_id}", max_duration_seconds={scroll_timeout})')
+                            result_lines.append(f"{indent_str}# Scroll search for element")
+                            result_lines.append(f'{indent_str}scroll_to_element({page_var}, None, by_test_id="{test_id}")')
                     elif 'get_by_role(' in stripped:
                         # Извлекаем роль и имя
                         role_match = re.search(r'get_by_role\("(\w+)"\s*,\s*name="([^"]+)"', stripped)
                         if role_match:
                             role = role_match.group(1)
                             name = role_match.group(2)
-                            result_lines.append(f"{indent_str}{scroll_comment}")
-                            result_lines.append(f'{indent_str}scroll_to_element({page_var}, None, by_role="{role}", name="{name}", max_duration_seconds={scroll_timeout})')
+                            result_lines.append(f"{indent_str}# Scroll search for element")
+                            result_lines.append(f'{indent_str}scroll_to_element({page_var}, None, by_role="{role}", name="{name}")')
                     elif 'locator(' in stripped:
                         # Извлекаем селектор (поддержка вложенных кавычек в xpath)
                         # Пробуем одинарные кавычки с поддержкой экранирования
@@ -1528,8 +1490,8 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
                             selector = selector_match.group(1)
                             # Экранируем кавычки в селекторе для генерации кода
                             selector = selector.replace('\\', '\\\\').replace('"', '\\"')
-                            result_lines.append(f"{indent_str}{scroll_comment}")
-                            result_lines.append(f'{indent_str}scroll_to_element({page_var}, "{selector}", max_duration_seconds={scroll_timeout})')
+                            result_lines.append(f"{indent_str}# Scroll search for element")
+                            result_lines.append(f'{indent_str}scroll_to_element({page_var}, "{selector}")')
 
                     scroll_next_action = False  # Сбрасываем флаг
 
@@ -1581,14 +1543,14 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
                                 if test_id_match:
                                     test_id = test_id_match.group(1)
                                     result_lines.append(f"{indent_str}    # Scroll search before attempt")
-                                    result_lines.append(f'{indent_str}    scroll_to_element({page_var}, None, by_test_id="{test_id}", max_duration_seconds={scroll_timeout})')
+                                    result_lines.append(f'{indent_str}    scroll_to_element({page_var}, None, by_test_id="{test_id}")')
                             elif 'get_by_role(' in stripped:
                                 role_match = re.search(r'get_by_role\("(\w+)"\s*,\s*name="([^"]+)"', stripped)
                                 if role_match:
                                     role = role_match.group(1)
                                     name = role_match.group(2)
                                     result_lines.append(f"{indent_str}    # Scroll search before attempt")
-                                    result_lines.append(f'{indent_str}    scroll_to_element({page_var}, None, by_role="{role}", name="{name}", max_duration_seconds={scroll_timeout})')
+                                    result_lines.append(f'{indent_str}    scroll_to_element({page_var}, None, by_role="{role}", name="{name}")')
                             elif 'locator(' in stripped:
                                 # Извлекаем селектор (поддержка вложенных кавычек в xpath)
                                 selector_match = re.search(r"locator\('((?:[^'\\]|\\.)*)'\)", stripped)
@@ -1599,7 +1561,7 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
                                     # Экранируем кавычки в селекторе для генерации кода
                                     selector = selector.replace('\\', '\\\\').replace('"', '\\"')
                                     result_lines.append(f"{indent_str}    # Scroll search before attempt")
-                                    result_lines.append(f'{indent_str}    scroll_to_element({page_var}, "{selector}", max_duration_seconds={scroll_timeout})')
+                                    result_lines.append(f'{indent_str}    scroll_to_element({page_var}, "{selector}")')
 
                         result_lines.append(f"{indent_str}    try:")
                         result_lines.append(f"{indent_str}        {stripped}")
@@ -1636,14 +1598,6 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
             else:
                 # Не действие - оставляем как есть
                 result_lines.append(line)
-
-            # Обновляем флаг last_line_was_goto для следующей итерации
-            # Проверяем является ли текущая строка page.goto()
-            if '.goto(' in stripped:
-                last_line_was_goto = True
-            elif is_action or (stripped and not stripped.startswith('#')):
-                # Сбрасываем флаг если это действие или обычная строка кода
-                last_line_was_goto = False
 
             i += 1
 
