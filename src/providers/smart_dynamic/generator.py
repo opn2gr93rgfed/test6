@@ -683,9 +683,12 @@ def wait_for_navigation(page, timeout=30000):
         return False
 
 
-def scroll_to_element(page, selector, by_role=None, name=None, by_test_id=None, max_scrolls=10):
+def scroll_to_element(page, selector, by_role=None, name=None, by_test_id=None, max_duration_seconds=180):
     """
-    Скроллит страницу вниз пока не найдет элемент
+    Циклически скроллит страницу вниз-вверх-вниз-вверх пока не найдет элемент
+
+    Подходит для динамически подгружаемых элементов, которые появляются при скролле.
+    Можно использовать как замену #retry для элементов требующих скролла.
 
     Args:
         page: Playwright page
@@ -693,16 +696,18 @@ def scroll_to_element(page, selector, by_role=None, name=None, by_test_id=None, 
         by_role: Тип роли (button, heading, textbox)
         name: Имя элемента для get_by_role
         by_test_id: Test ID элемента для get_by_test_id
-        max_scrolls: Максимум скроллов
+        max_duration_seconds: Максимальное время поиска в секундах (по умолчанию 180 = 3 минуты)
 
     Returns:
         True если элемент найден, False если нет
     """
-    print(f"[SCROLL_SEARCH] Ищу элемент с прокруткой...")
+    print(f"[SCROLL_SEARCH] Ищу элемент с циклическим скроллом (max {max_duration_seconds}s)...")
 
-    for scroll_attempt in range(max_scrolls):
+    start_time = time.time()
+
+    def check_element_visible():
+        """Проверяет видимость элемента"""
         try:
-            # Проверяем наличие элемента
             if by_test_id:
                 element = page.get_by_test_id(by_test_id).first
             elif by_role:
@@ -710,28 +715,97 @@ def scroll_to_element(page, selector, by_role=None, name=None, by_test_id=None, 
             else:
                 element = page.locator(selector).first
 
-            # Пробуем получить элемент с коротким таймаутом
             if element.is_visible(timeout=1000):
-                print(f"[SCROLL_SEARCH] [OK] Элемент найден после {scroll_attempt} прокруток")
                 # Прокрутить к элементу
                 element.scroll_into_view_if_needed(timeout=2000)
                 time.sleep(0.5)
                 return True
         except:
-            pass  # Элемент не найден, продолжаем
+            pass
+        return False
 
-        # Скроллим вниз
-        current_scroll = page.evaluate('window.pageYOffset')
-        page.evaluate('window.scrollBy(0, window.innerHeight * 0.8)')  # Скролл на 80% высоты экрана
-        time.sleep(0.5)
+    def is_time_expired():
+        """Проверяет не истекло ли время"""
+        elapsed = time.time() - start_time
+        if elapsed >= max_duration_seconds:
+            print(f"[SCROLL_SEARCH] [!] Превышен лимит времени ({elapsed:.1f}s / {max_duration_seconds}s)")
+            return True
+        return False
 
-        # Проверяем достигли ли конца страницы
-        new_scroll = page.evaluate('window.pageYOffset')
-        if new_scroll == current_scroll:
-            print(f"[SCROLL_SEARCH] [!] Достигнут конец страницы, элемент не найден")
-            return False
+    # 1. Проверяем элемент на текущей позиции
+    if check_element_visible():
+        print(f"[SCROLL_SEARCH] [OK] Элемент найден на текущей позиции")
+        return True
 
-    print(f"[SCROLL_SEARCH] [!] Элемент не найден после {max_scrolls} прокруток")
+    scroll_count = 0
+    cycle = 0
+
+    # 2. ЦИКЛИЧЕСКИЙ ПОИСК: вниз → вверх → вниз → вверх...
+    while not is_time_expired():
+        cycle += 1
+        elapsed = time.time() - start_time
+        print(f"[SCROLL_SEARCH] === Цикл {cycle} (время: {elapsed:.1f}s / {max_duration_seconds}s) ===")
+
+        # 2.1. Скроллим ВНИЗ до конца страницы
+        print(f"[SCROLL_SEARCH] Скроллю вниз...")
+        max_down_scrolls = 30  # Максимум попыток вниз
+        for _ in range(max_down_scrolls):
+            if is_time_expired():
+                break
+
+            current_scroll = page.evaluate('window.pageYOffset')
+            page.evaluate('window.scrollBy(0, window.innerHeight * 0.8)')  # Скролл на 80% высоты экрана
+            time.sleep(0.5)
+            scroll_count += 1
+
+            # Проверяем элемент
+            if check_element_visible():
+                elapsed = time.time() - start_time
+                print(f"[SCROLL_SEARCH] [OK] Элемент найден после {scroll_count} прокруток за {elapsed:.1f}s (цикл {cycle}, вниз)")
+                return True
+
+            # Проверяем достигли ли конца страницы
+            new_scroll = page.evaluate('window.pageYOffset')
+            if new_scroll == current_scroll:
+                print(f"[SCROLL_SEARCH] Достигнут конец страницы")
+                break
+
+        if is_time_expired():
+            break
+
+        # 2.2. Скроллим ВВЕРХ до начала страницы
+        print(f"[SCROLL_SEARCH] Скроллю вверх...")
+        max_up_scrolls = 30  # Максимум попыток вверх
+        for _ in range(max_up_scrolls):
+            if is_time_expired():
+                break
+
+            current_scroll = page.evaluate('window.pageYOffset')
+
+            # Скроллим вверх
+            page.evaluate('window.scrollBy(0, -window.innerHeight * 0.8)')  # Скролл вверх
+            time.sleep(0.5)
+            scroll_count += 1
+
+            # Проверяем элемент
+            if check_element_visible():
+                elapsed = time.time() - start_time
+                print(f"[SCROLL_SEARCH] [OK] Элемент найден после {scroll_count} прокруток за {elapsed:.1f}s (цикл {cycle}, вверх)")
+                return True
+
+            # Проверяем достигли ли начала страницы
+            new_scroll = page.evaluate('window.pageYOffset')
+            if new_scroll == current_scroll or new_scroll <= 0:
+                print(f"[SCROLL_SEARCH] Достигнуто начало страницы")
+                break
+
+        # Пауза между циклами (чтобы дать элементу время загрузиться)
+        if not is_time_expired():
+            print(f"[SCROLL_SEARCH] Пауза 2 сек перед следующим циклом...")
+            time.sleep(2)
+
+    elapsed = time.time() - start_time
+    print(f"[SCROLL_SEARCH] [!] Элемент не найден после {scroll_count} прокруток за {elapsed:.1f}s ({cycle} циклов)")
     return False
 
 
