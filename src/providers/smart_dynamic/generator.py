@@ -1043,7 +1043,7 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
                                 print(f"[DYNAMIC_QA]   -> Заполняю поле '{field_name}': {value}")
                                 textbox = page.get_by_role("textbox", name=field_name).first
                                 textbox.click(timeout=5000)
-                                textbox.fill(value, timeout=5000)
+                                textbox.press_sequentially(value, delay=100)  # Симуляция реального ввода с задержкой 100ms
                                 time.sleep(0.3)
 
                             # Нажатие клавиши
