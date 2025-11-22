@@ -53,6 +53,9 @@ class Generator:
         self.simulate_typing = config.get('simulate_typing', True)
         self.typing_delay = config.get('typing_delay', 100)
 
+        # Задержка между действиями (клики, заполнения)
+        self.action_delay = config.get('action_delay', 0.5)
+
         # ПАРСИНГ: Извлекаем вопросы и действия из user_code
         questions_pool, pre_questions_code, post_questions_code = self._parse_user_code(user_code)
 
@@ -1113,7 +1116,7 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
                                 button_text = action.get('value')
                                 print(f"[DYNAMIC_QA]   -> Кликаю кнопку: {button_text}")
                                 page.get_by_role("button", name=button_text).click(timeout=10000)
-                                time.sleep(0.5)
+                                time.sleep({self.action_delay})
 
                             # Заполнение текстового поля
                             elif action_type == 'textbox_fill':
@@ -1126,22 +1129,22 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
                                 print(f"[DYNAMIC_QA]   -> Заполняю поле '{field_name}': {value}")
                                 textbox = page.get_by_role("textbox", name=field_name).first
                                 textbox.click(timeout=5000)
-                                textbox.press_sequentially(value, delay=100)  # Симуляция реального ввода с задержкой 100ms
-                                time.sleep(0.3)
+                                textbox.press_sequentially(value, delay={self.typing_delay})
+                                time.sleep({self.action_delay})
 
                             # Нажатие клавиши
                             elif action_type == 'press_key':
                                 key = action.get('key')
                                 print(f"[DYNAMIC_QA]   -> Нажимаю клавишу: {key}")
                                 page.keyboard.press(key)
-                                time.sleep(0.2)
+                                time.sleep({self.action_delay})
 
                             # Клик по locator
                             elif action_type == 'locator_click':
                                 selector = action.get('selector')
                                 print(f"[DYNAMIC_QA]   -> Кликаю элемент: {selector[:50]}...")
                                 page.locator(selector).first.click(timeout=10000)
-                                time.sleep(0.5)
+                                time.sleep({self.action_delay})
 
                         except Exception as e:
                             print(f"[DYNAMIC_QA]   [ERROR] Не удалось выполнить действие: {e}")
