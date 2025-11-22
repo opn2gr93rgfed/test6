@@ -302,52 +302,145 @@ def wait_for_navigation(page, timeout=30000):
         return False
 
 
-def scroll_to_element(page, selector, by_role=None, name=None, max_scrolls=10):
+def scroll_to_element(page, selector, by_role=None, name=None, by_test_id=None, max_duration_seconds=180):
     """
-    Скроллит страницу вниз пока не найдет элемент
+    Циклически скроллит страницу вниз-вверх-вниз-вверх пока не найдет элемент
 
     Args:
         page: Playwright page
-        selector: CSS selector (если by_role=None)
+        selector: CSS selector (если by_role=None и by_test_id=None)
         by_role: Тип роли (button, heading, textbox)
         name: Имя элемента для get_by_role
-        max_scrolls: Максимум скроллов
+        by_test_id: Test ID элемента для get_by_test_id
+        max_duration_seconds: Максимальное время поиска в секундах (по умолчанию 180 = 3 минуты)
 
     Returns:
         True если элемент найден, False если нет
     """
-    print(f"[SCROLL_SEARCH] Ищу элемент с прокруткой...")
+    print(f"[SCROLL_SEARCH] Ищу элемент с циклическим скроллом (max {max_duration_seconds}s)...")
+    start_time = time.time()
 
-    for scroll_attempt in range(max_scrolls):
+    def check_element_visible():
+        """Проверяет видимость элемента"""
         try:
-            # Проверяем наличие элемента
-            if by_role:
-                element = page.get_by_role(by_role, name=name).first
+            if by_test_id:
+                locator = page.get_by_test_id(by_test_id)
+                print(f"[SCROLL_SEARCH] [DEBUG] Ищу по test_id='{by_test_id}'")
+            elif by_role:
+                locator = page.get_by_role(by_role, name=name)
+                print(f"[SCROLL_SEARCH] [DEBUG] Ищу по role='{by_role}', name='{name}'")
             else:
-                element = page.locator(selector).first
+                locator = page.locator(selector)
+                print(f"[SCROLL_SEARCH] [DEBUG] Ищу по selector='{selector}'")
 
-            # Пробуем получить элемент с коротким таймаутом
-            if element.is_visible(timeout=1000):
-                print(f"[SCROLL_SEARCH] [OK] Элемент найден после {scroll_attempt} прокруток")
-                # Прокрутить к элементу
-                element.scroll_into_view_if_needed(timeout=2000)
-                time.sleep(0.5)
-                return True
-        except:
-            pass  # Элемент не найден, продолжаем
+            # Проверяем сколько элементов найдено
+            count = locator.count()
+            print(f"[SCROLL_SEARCH] [DEBUG] Найдено элементов: {count}")
 
-        # Скроллим вниз
-        current_scroll = page.evaluate('window.pageYOffset')
-        page.evaluate('window.scrollBy(0, window.innerHeight * 0.8)')  # Скролл на 80% высоты экрана
-        time.sleep(0.5)
+            if count == 0:
+                print(f"[SCROLL_SEARCH] [DEBUG] Элементов не найдено!")
+                return False
 
-        # Проверяем достигли ли конца страницы
-        new_scroll = page.evaluate('window.pageYOffset')
-        if new_scroll == current_scroll:
-            print(f"[SCROLL_SEARCH] [!] Достигнут конец страницы, элемент не найден")
+            # Проверяем ВСЕ элементы, не только first
+            for i in range(count):
+                element = locator.nth(i)
+                print(f"[SCROLL_SEARCH] [DEBUG] Проверяю элемент #{i} is_visible(timeout=5000)...")
+                try:
+                    if element.is_visible(timeout=5000):
+                        print(f"[SCROLL_SEARCH] [DEBUG] Элемент #{i} ВИДИМЫЙ! Использую его.")
+                        # Прокрутить к элементу
+                        element.scroll_into_view_if_needed(timeout=2000)
+                        time.sleep(0.5)
+                        return True
+                    else:
+                        print(f"[SCROLL_SEARCH] [DEBUG] Элемент #{i} невидимый, пробую следующий...")
+                except:
+                    print(f"[SCROLL_SEARCH] [DEBUG] Элемент #{i} timeout/error, пробую следующий...")
+                    continue
+
+            print(f"[SCROLL_SEARCH] [DEBUG] Все {count} элементов проверены - все невидимые")
             return False
 
-    print(f"[SCROLL_SEARCH] [!] Элемент не найден после {max_scrolls} прокруток")
+        except Exception as e:
+            print(f"[SCROLL_SEARCH] [DEBUG] Exception: {type(e).__name__}: {str(e)[:100]}")
+            pass
+        return False
+
+    def is_time_expired():
+        """Проверяет не истекло ли время"""
+        elapsed = time.time() - start_time
+        if elapsed >= max_duration_seconds:
+            print(f"[SCROLL_SEARCH] [!] Превышен лимит времени ({elapsed:.1f}s / {max_duration_seconds}s)")
+            return True
+        return False
+
+    # 1. Проверяем элемент на текущей позиции
+    if check_element_visible():
+        print(f"[SCROLL_SEARCH] [OK] Элемент найден на текущей позиции")
+        return True
+
+    scroll_count = 0
+    cycle = 0
+
+    # 2. ЦИКЛИЧЕСКИЙ ПОИСК: вниз → вверх → вниз → вверх...
+    while not is_time_expired():
+        cycle += 1
+        elapsed = time.time() - start_time
+        print(f"[SCROLL_SEARCH] === Цикл {cycle} (время: {elapsed:.1f}s / {max_duration_seconds}s) ===")
+
+        # 2.1. Скроллим ВНИЗ до конца страницы
+        print(f"[SCROLL_SEARCH] Скроллю вниз...")
+        max_down_scrolls = 30
+        for _ in range(max_down_scrolls):
+            if is_time_expired():
+                break
+
+            current_scroll = page.evaluate('window.pageYOffset')
+            page.evaluate('window.scrollBy(0, window.innerHeight * 0.8)')
+            time.sleep(0.5)
+            scroll_count += 1
+
+            if check_element_visible():
+                elapsed = time.time() - start_time
+                print(f"[SCROLL_SEARCH] [OK] Элемент найден после {scroll_count} прокруток за {elapsed:.1f}s (цикл {cycle}, вниз)")
+                return True
+
+            new_scroll = page.evaluate('window.pageYOffset')
+            if new_scroll == current_scroll:
+                print(f"[SCROLL_SEARCH] Достигнут конец страницы")
+                break
+
+        if is_time_expired():
+            break
+
+        # 2.2. Скроллим ВВЕРХ до начала страницы
+        print(f"[SCROLL_SEARCH] Скроллю вверх...")
+        max_up_scrolls = 30
+        for _ in range(max_up_scrolls):
+            if is_time_expired():
+                break
+
+            current_scroll = page.evaluate('window.pageYOffset')
+            page.evaluate('window.scrollBy(0, -window.innerHeight * 0.8)')
+            time.sleep(0.5)
+            scroll_count += 1
+
+            if check_element_visible():
+                elapsed = time.time() - start_time
+                print(f"[SCROLL_SEARCH] [OK] Элемент найден после {scroll_count} прокруток за {elapsed:.1f}s (цикл {cycle}, вверх)")
+                return True
+
+            new_scroll = page.evaluate('window.pageYOffset')
+            if new_scroll == current_scroll or new_scroll <= 0:
+                print(f"[SCROLL_SEARCH] Достигнуто начало страницы")
+                break
+
+        if not is_time_expired():
+            print(f"[SCROLL_SEARCH] Пауза 2 сек перед следующим циклом...")
+            time.sleep(2)
+
+    elapsed = time.time() - start_time
+    print(f"[SCROLL_SEARCH] [!] Элемент не найден после {scroll_count} прокруток за {elapsed:.1f}s ({cycle} циклов)")
     return False
 
 
@@ -890,24 +983,53 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
                         raise
                     print(f'[RETRY] Timeout, retrying...', flush=True)
         page1 = page1_info.value
-        #optional
+
+        # Cookie banner (optional)
         try:
-            page.get_by_role("button", name="Not Now").click()
+            page1.get_by_role("button", name="Not Now").click()
+            print("[ACTION] [OK] Cookie banner закрыт")
         except PlaywrightTimeout:
-            print("[ACTION] [WARNING] Timeout - элемент не найден", flush=True)
-            print("[ACTION] [INFO] Продолжаем выполнение...", flush=True)
+            print("[ACTION] [INFO] Cookie banner не найден, продолжаем...")
             pass
-        print(f'[PAUSE] Waiting 40 seconds...', flush=True)
-        time.sleep(40)
-        #optional
-        # Scroll search enabled for next action
-        # Scroll search for element
-        scroll_to_element(page1, None, by_role="button", name="Show More")
+
+        # Ждём первой загрузки карточек (skeleton исчезнет)
+        print("[INFO] Ожидание загрузки карточек...")
         try:
-            page1.get_by_role("button", name="Show More").click()
+            page1.locator('[data-testid="quote_skeleton_card"]').wait_for(state='detached', timeout=120000)
+            print("[INFO] Первая загрузка завершена")
+        except:
+            print("[INFO] Skeleton уже исчез")
+
+        time.sleep(2)
+
+        # Кликаем show-more (контент начнёт перезагружаться)
+        scroll_to_element(page1, None, by_test_id="show-more")
+        try:
+            page1.get_by_test_id("show-more").click()
+            print("[INFO] show-more нажата, ждём обновления контента...")
         except PlaywrightTimeout:
-            print("[ACTION] [WARNING] Timeout - элемент не найден", flush=True)
-            print("[ACTION] [INFO] Продолжаем выполнение...", flush=True)
+            print("[ACTION] [WARNING] show-more не найдена")
+            pass
+
+        # Ждём ПОВТОРНОЙ загрузки после клика
+        time.sleep(3)
+
+        # Ждём пока skeleton исчезнет ЕЩЁ РАЗ (если появился)
+        try:
+            page1.locator('[data-testid="quote_skeleton_card"]').wait_for(state='detached', timeout=120000)
+            print("[INFO] Контент после show-more загружен")
+        except:
+            print("[INFO] Контент обновлён без skeleton")
+
+        time.sleep(2)
+
+        # Теперь контент стабилен - можно искать Root logo
+        scroll_to_element(page1, 'xpath=//img[@alt="Root" and contains(@src, "high-definition/root.svg")]')
+        try:
+            page1.locator('xpath=//img[@alt="Root" and contains(@src, "high-definition/root.svg")]').click()
+            print("[INFO] Root logo нажат")
+        except PlaywrightTimeout:
+            print("[ACTION] [WARNING] Root logo не найден")
             pass
 
         print(f"[ITERATION {iteration_number}] [OK] Завершено успешно")
