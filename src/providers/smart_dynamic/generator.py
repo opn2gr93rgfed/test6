@@ -1316,6 +1316,7 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
         Добавляет обработку ошибок для Playwright действий
 
         Оборачивает клики, fill и другие действия в try-except или retry логику
+        НОВАЯ ФУНКЦИОНАЛЬНОСТЬ: Автоматически добавляет scroll_to_element() перед всеми действиями
         """
         if not code or not code.strip():
             return code
@@ -1331,6 +1332,7 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
         retry_attempts = 3  # Количество попыток для #retry
         retry_wait = 30  # Время ожидания между попытками (сек)
         retry_scroll_search = False  # Использовать ли scroll_search в retry
+        last_line_was_goto = False  # Флаг для отслеживания page.goto()
 
         while i < len(lines):
             line = lines[i]
@@ -1452,8 +1454,15 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
                 # Получаем индент
                 indent_str = ' ' * current_indent
 
+                # Определяем нужно ли автоматически добавить scroll_to_element()
+                # Авто-детекция НЕ работает если:
+                # 1. Внутри with блока (критичные действия для popup)
+                # 2. Сразу после page.goto() (элемент в начале страницы)
+                # 3. Уже установлен флаг scroll_next_action (явный #scroll_search)
+                auto_scroll_enabled = not inside_with_block and not last_line_was_goto and not scroll_next_action
+
                 # Если установлен флаг scroll_next_action - добавляем scroll_to_element() перед действием
-                if scroll_next_action:
+                if scroll_next_action or auto_scroll_enabled:
                     # Парсим действие чтобы определить page, selector, role
                     page_var = 'page'  # По умолчанию
                     if 'page1.' in stripped:
@@ -1463,13 +1472,19 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
                     elif 'page3.' in stripped:
                         page_var = 'page3'
 
+                    # Определяем комментарий в зависимости от источника
+                    if auto_scroll_enabled:
+                        scroll_comment = "# AUTO-SCROLL: Automatically scrolling to element"
+                    else:
+                        scroll_comment = "# Scroll search for element"
+
                     # Определяем тип действия
                     if 'get_by_test_id(' in stripped:
                         # Извлекаем test_id
                         test_id_match = re.search(r'get_by_test_id\(["\']([^"\']+)["\']\)', stripped)
                         if test_id_match:
                             test_id = test_id_match.group(1)
-                            result_lines.append(f"{indent_str}# Scroll search for element")
+                            result_lines.append(f"{indent_str}{scroll_comment}")
                             result_lines.append(f'{indent_str}scroll_to_element({page_var}, None, by_test_id="{test_id}")')
                     elif 'get_by_role(' in stripped:
                         # Извлекаем роль и имя
@@ -1477,7 +1492,7 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
                         if role_match:
                             role = role_match.group(1)
                             name = role_match.group(2)
-                            result_lines.append(f"{indent_str}# Scroll search for element")
+                            result_lines.append(f"{indent_str}{scroll_comment}")
                             result_lines.append(f'{indent_str}scroll_to_element({page_var}, None, by_role="{role}", name="{name}")')
                     elif 'locator(' in stripped:
                         # Извлекаем селектор (поддержка вложенных кавычек в xpath)
@@ -1490,7 +1505,7 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
                             selector = selector_match.group(1)
                             # Экранируем кавычки в селекторе для генерации кода
                             selector = selector.replace('\\', '\\\\').replace('"', '\\"')
-                            result_lines.append(f"{indent_str}# Scroll search for element")
+                            result_lines.append(f"{indent_str}{scroll_comment}")
                             result_lines.append(f'{indent_str}scroll_to_element({page_var}, "{selector}")')
 
                     scroll_next_action = False  # Сбрасываем флаг
@@ -1598,6 +1613,14 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
             else:
                 # Не действие - оставляем как есть
                 result_lines.append(line)
+
+            # Обновляем флаг last_line_was_goto для следующей итерации
+            # Проверяем является ли текущая строка page.goto()
+            if '.goto(' in stripped:
+                last_line_was_goto = True
+            elif is_action or (stripped and not stripped.startswith('#')):
+                # Сбрасываем флаг если это действие или обычная строка кода
+                last_line_was_goto = False
 
             i += 1
 
