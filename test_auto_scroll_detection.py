@@ -152,7 +152,8 @@ def test_get_by_test_id_auto_scroll():
     print(result)
 
     assert "AUTO-SCROLL: Automatically scrolling to element" in result, "Should add auto-scroll comment"
-    assert 'scroll_to_element(page, None, by_test_id="show-more")' in result, "Should add scroll_to_element with test_id"
+    assert 'scroll_to_element(page, None, by_test_id="show-more"' in result, "Should add scroll_to_element with test_id"
+    assert 'max_duration_seconds=' in result, "Should include timeout parameter"
     print("✅ PASSED: get_by_test_id auto-scroll works")
 
 
@@ -175,6 +176,47 @@ def test_locator_xpath_auto_scroll():
     print("✅ PASSED: locator xpath auto-scroll works")
 
 
+def test_no_auto_scroll_for_heading():
+    """Тест: heading элементы НЕ должны получать auto-scroll (для динамических вопросов)"""
+    print("\n=== TEST 8: heading elements (should NOT add auto-scroll) ===")
+
+    provider = Generator()
+
+    test_code = """page.get_by_role("heading", name="Are you currently insured?").click()"""
+
+    result = provider._add_error_handling_to_actions(test_code)
+    print("INPUT:")
+    print(test_code)
+    print("\nOUTPUT:")
+    print(result)
+
+    # Проверяем что НЕТ AUTO-SCROLL для heading
+    assert "AUTO-SCROLL" not in result, "Should NOT add auto-scroll for heading elements"
+    assert "scroll_to_element" not in result, "Should NOT call scroll_to_element for heading"
+    print("✅ PASSED: No auto-scroll for heading elements")
+
+
+def test_scroll_timeout_command():
+    """Тест: команда #scroll_timeout:N должна изменять таймаут"""
+    print("\n=== TEST 9: #scroll_timeout command ===")
+
+    provider = Generator()
+
+    test_code = """#scroll_timeout:30
+page.get_by_role("button", name="Quick action").click()"""
+
+    result = provider._add_error_handling_to_actions(test_code)
+    print("INPUT:")
+    print(test_code)
+    print("\nOUTPUT:")
+    print(result)
+
+    # Проверяем что используется правильный таймаут
+    assert "Scroll timeout set to 30s" in result, "Should acknowledge timeout setting"
+    assert "max_duration_seconds=30" in result, "Should use custom timeout of 30s"
+    print("✅ PASSED: scroll_timeout command works")
+
+
 if __name__ == "__main__":
     print("="*60)
     print("AUTO-SCROLL DETECTION TESTS")
@@ -188,6 +230,8 @@ if __name__ == "__main__":
         test_multiple_actions_with_mixed_scenarios,
         test_get_by_test_id_auto_scroll,
         test_locator_xpath_auto_scroll,
+        test_no_auto_scroll_for_heading,
+        test_scroll_timeout_command,
     ]
 
     passed = 0
