@@ -1477,14 +1477,16 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
                             result_lines.append(f"{indent_str}# Scroll search for element")
                             result_lines.append(f'{indent_str}scroll_to_element({page_var}, None, by_role="{role}", name="{name}")')
                     elif 'locator(' in stripped:
-                        # Извлекаем селектор
-                        selector_match = re.search(r"locator\(['\"]([^'\"]+)['\"]\)", stripped)
+                        # Извлекаем селектор (поддержка вложенных кавычек в xpath)
+                        # Пробуем одинарные кавычки с поддержкой экранирования
+                        selector_match = re.search(r"locator\('((?:[^'\\]|\\.)*)'\)", stripped)
                         if not selector_match:
-                            selector_match = re.search(r'locator\("([^"]+)"\)', stripped)
+                            # Пробуем двойные кавычки с поддержкой экранирования
+                            selector_match = re.search(r'locator\("((?:[^"\\]|\\.)*)"\)', stripped)
                         if selector_match:
                             selector = selector_match.group(1)
-                            # Экранируем кавычки в селекторе
-                            selector = selector.replace('"', '\\"')
+                            # Экранируем кавычки в селекторе для генерации кода
+                            selector = selector.replace('\\', '\\\\').replace('"', '\\"')
                             result_lines.append(f"{indent_str}# Scroll search for element")
                             result_lines.append(f'{indent_str}scroll_to_element({page_var}, "{selector}")')
 
@@ -1547,12 +1549,14 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
                                     result_lines.append(f"{indent_str}    # Scroll search before attempt")
                                     result_lines.append(f'{indent_str}    scroll_to_element({page_var}, None, by_role="{role}", name="{name}")')
                             elif 'locator(' in stripped:
-                                selector_match = re.search(r"locator\(['\"]([^'\"]+)['\"]\)", stripped)
+                                # Извлекаем селектор (поддержка вложенных кавычек в xpath)
+                                selector_match = re.search(r"locator\('((?:[^'\\]|\\.)*)'\)", stripped)
                                 if not selector_match:
-                                    selector_match = re.search(r'locator\("([^"]+)"\)', stripped)
+                                    selector_match = re.search(r'locator\("((?:[^"\\]|\\.)*)"\)', stripped)
                                 if selector_match:
                                     selector = selector_match.group(1)
-                                    selector = selector.replace('"', '\\"')
+                                    # Экранируем кавычки в селекторе для генерации кода
+                                    selector = selector.replace('\\', '\\\\').replace('"', '\\"')
                                     result_lines.append(f"{indent_str}    # Scroll search before attempt")
                                     result_lines.append(f'{indent_str}    scroll_to_element({page_var}, "{selector}")')
 
