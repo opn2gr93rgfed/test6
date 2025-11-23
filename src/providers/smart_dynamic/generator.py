@@ -1378,6 +1378,7 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
         retry_attempts = 3  # Количество попыток для #retry
         retry_wait = 30  # Время ожидания между попытками (сек)
         retry_scroll_search = False  # Использовать ли scroll_search в retry
+        current_page_context = 'page'  # Отслеживание текущего контекста страницы (page, page1, page2, page3)
 
         while i < len(lines):
             line = lines[i]
@@ -1391,6 +1392,29 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
 
             # Определяем текущий indent
             current_indent = len(line) - len(line.lstrip())
+
+            # Отслеживание переключения контекста страницы
+            if '= page1_info.value' in stripped:
+                current_page_context = 'page1'
+                result_lines.append(line)
+                i += 1
+                continue
+            elif '= page2_info.value' in stripped:
+                current_page_context = 'page2'
+                # Добавляем дебаг маркер для page2
+                indent_str = ' ' * current_indent
+                result_lines.append(line)
+                result_lines.append(f"{indent_str}print('[PAGE2_DEBUG] ===== НАЧАЛО РАБОТЫ С PAGE2 =====', flush=True)")
+                i += 1
+                continue
+            elif '= page3_info.value' in stripped:
+                current_page_context = 'page3'
+                # Добавляем дебаг маркер для page3
+                indent_str = ' ' * current_indent
+                result_lines.append(line)
+                result_lines.append(f"{indent_str}print('[PAGE3_DEBUG] ===== НАЧАЛО РАБОТЫ С PAGE3 =====', flush=True)")
+                i += 1
+                continue
 
             # Отслеживаем вход в with блок
             if stripped.startswith('with '):
@@ -1413,14 +1437,18 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
                 pause_match = re.match(r'#\s*pause\s*(\d+)', special_cmd)
                 if pause_match:
                     seconds = pause_match.group(1)
-                    result_lines.append(f"{indent_str}print(f'[PAUSE] Waiting {seconds} seconds...', flush=True)")
+                    # Дебаг только для page2 и page3
+                    if current_page_context in ['page2', 'page3']:
+                        result_lines.append(f"{indent_str}print(f'[{current_page_context.upper()}_DEBUG] [PAUSE] Waiting {seconds} seconds...', flush=True)")
                     result_lines.append(f"{indent_str}time.sleep({seconds})")
                     i += 1
                     continue
 
                 # #scrolldown or #scroll
                 if special_cmd in ['#scrolldown', '#scroll']:
-                    result_lines.append(f"{indent_str}print(f'[SCROLL] Scrolling down...', flush=True)")
+                    # Дебаг только для page2 и page3
+                    if current_page_context in ['page2', 'page3']:
+                        result_lines.append(f"{indent_str}print(f'[{current_page_context.upper()}_DEBUG] [SCROLL] Scrolling down...', flush=True)")
                     result_lines.append(f"{indent_str}page.evaluate('window.scrollTo(0, document.body.scrollHeight)')")
                     result_lines.append(f"{indent_str}time.sleep(0.5)")
                     i += 1
@@ -1428,7 +1456,9 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
 
                 # #scrollup
                 if special_cmd == '#scrollup':
-                    result_lines.append(f"{indent_str}print(f'[SCROLL] Scrolling up...', flush=True)")
+                    # Дебаг только для page2 и page3
+                    if current_page_context in ['page2', 'page3']:
+                        result_lines.append(f"{indent_str}print(f'[{current_page_context.upper()}_DEBUG] [SCROLL] Scrolling up...', flush=True)")
                     result_lines.append(f"{indent_str}page.evaluate('window.scrollTo(0, 0)')")
                     result_lines.append(f"{indent_str}time.sleep(0.5)")
                     i += 1
@@ -1436,7 +1466,9 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
 
                 # #scrollmid
                 if special_cmd == '#scrollmid':
-                    result_lines.append(f"{indent_str}print(f'[SCROLL] Scrolling to middle...', flush=True)")
+                    # Дебаг только для page2 и page3
+                    if current_page_context in ['page2', 'page3']:
+                        result_lines.append(f"{indent_str}print(f'[{current_page_context.upper()}_DEBUG] [SCROLL] Scrolling to middle...', flush=True)")
                     result_lines.append(f"{indent_str}page.evaluate('window.scrollTo(0, document.body.scrollHeight / 2)')")
                     result_lines.append(f"{indent_str}time.sleep(0.5)")
                     i += 1
@@ -1545,22 +1577,30 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
                 # Действия внутри with блока критичны - нужен retry с прогрессивными задержками
                 if inside_with_block:
                     # RETRY ЛОГИКА для критичных действий (popup открытие, navigation)
-                    result_lines.append(f"{indent_str}# Retry logic for critical action")
+                    # Дебаг только для page2/page3
+                    if current_page_context in ['page2', 'page3']:
+                        result_lines.append(f"{indent_str}print(f'[{current_page_context.upper()}_DEBUG] Retry logic for critical action', flush=True)")
                     result_lines.append(f"{indent_str}max_retries = 5")
                     result_lines.append(f"{indent_str}for retry_attempt in range(max_retries):")
                     result_lines.append(f"{indent_str}    try:")
                     result_lines.append(f"{indent_str}        if retry_attempt > 0:")
                     result_lines.append(f"{indent_str}            wait_time = retry_attempt * 3  # 3s, 6s, 9s, 12s, 15s")
+                    # Всегда показываем retry (это важно)
                     result_lines.append(f"{indent_str}            print(f'[RETRY] Attempt {{retry_attempt+1}}/{{max_retries}} after {{wait_time}}s...', flush=True)")
                     result_lines.append(f"{indent_str}            time.sleep(wait_time)")
                     result_lines.append(f"{indent_str}        {stripped}")
-                    result_lines.append(f"{indent_str}        print(f'[ACTION] [OK] Success', flush=True)")
+                    # Дебаг успеха только для page2/page3
+                    if current_page_context in ['page2', 'page3']:
+                        result_lines.append(f"{indent_str}        print(f'[{current_page_context.upper()}_DEBUG] [ACTION] [OK] Success', flush=True)")
                     result_lines.append(f"{indent_str}        break")
                     result_lines.append(f"{indent_str}    except PlaywrightTimeout:")
                     result_lines.append(f"{indent_str}        if retry_attempt == max_retries - 1:")
-                    result_lines.append(f"{indent_str}            print(f'[ACTION] [ERROR] Failed after {{max_retries}} retries', flush=True)")
+                    # Всегда показываем ошибки (критично)
+                    result_lines.append(f"{indent_str}            print(f'[CRASH] [ERROR] Failed after {{max_retries}} retries - {stripped[:50]}', flush=True)")
                     result_lines.append(f"{indent_str}            raise")
-                    result_lines.append(f"{indent_str}        print(f'[RETRY] Timeout, retrying...', flush=True)")
+                    # Дебаг retry только для page2/page3
+                    if current_page_context in ['page2', 'page3']:
+                        result_lines.append(f"{indent_str}        print(f'[{current_page_context.upper()}_DEBUG] [RETRY] Timeout, retrying...', flush=True)")
                 else:
                     # Действия вне with блока - retry, optional, или простой try-except
                     if retry_next_action:
@@ -1626,6 +1666,7 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
                         retry_scroll_search = False  # Сбрасываем флаг scroll_search
                     elif optional_next_action:
                         # Более понятные сообщения для опциональных элементов
+                        # Всегда показываем optional (важно)
                         result_lines.append(f"{indent_str}print('[OPTIONAL] Trying optional element...', flush=True)")
                         result_lines.append(f"{indent_str}try:")
                         result_lines.append(f"{indent_str}    {stripped}")
@@ -1636,12 +1677,65 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
                         optional_next_action = False  # Сбрасываем флаг
                     else:
                         # Обычные действия вне with блока
-                        result_lines.append(f"{indent_str}try:")
-                        result_lines.append(f"{indent_str}    {stripped}")
-                        result_lines.append(f"{indent_str}except PlaywrightTimeout:")
-                        result_lines.append(f'{indent_str}    print("[ACTION] [WARNING] Timeout - элемент не найден", flush=True)')
-                        result_lines.append(f'{indent_str}    print("[ACTION] [INFO] Продолжаем выполнение...", flush=True)')
-                        result_lines.append(f"{indent_str}    pass")
+                        # Детектим кнопку "Let's go" для специального дебага
+                        is_lets_go_button = ("Let's go" in stripped or "Let\\'s go" in stripped) and '.click()' in stripped and current_page_context == 'page2'
+
+                        # Дебаг для page2/page3 или критичной кнопки Let's go
+                        if current_page_context in ['page2', 'page3'] or is_lets_go_button:
+                            if is_lets_go_button:
+                                result_lines.append(f"{indent_str}# ===== СПЕЦИАЛЬНЫЙ ДЕБАГ ДЛЯ КНОПКИ LET'S GO =====")
+                                result_lines.append(f"{indent_str}print('[LETS_GO_DEBUG] Попытка найти и кликнуть кнопку Let\\'s go...', flush=True)")
+                                result_lines.append(f"{indent_str}try:")
+                                result_lines.append(f"{indent_str}    # Проверяем видимость кнопки")
+                                result_lines.append(f"{indent_str}    button = page2.get_by_role('button', name=\"Let's go\")")
+                                result_lines.append(f"{indent_str}    print(f'[LETS_GO_DEBUG] Кнопка найдена, count={{button.count()}}', flush=True)")
+                                result_lines.append(f"{indent_str}    print(f'[LETS_GO_DEBUG] Проверяю видимость...', flush=True)")
+                                result_lines.append(f"{indent_str}    is_visible = button.is_visible(timeout=5000)")
+                                result_lines.append(f"{indent_str}    print(f'[LETS_GO_DEBUG] is_visible={{is_visible}}', flush=True)")
+                                result_lines.append(f"{indent_str}    print(f'[LETS_GO_DEBUG] Проверяю enabled...', flush=True)")
+                                result_lines.append(f"{indent_str}    is_enabled = button.is_enabled(timeout=5000)")
+                                result_lines.append(f"{indent_str}    print(f'[LETS_GO_DEBUG] is_enabled={{is_enabled}}', flush=True)")
+                                result_lines.append(f"{indent_str}    print(f'[LETS_GO_DEBUG] Попытка клика...', flush=True)")
+                                result_lines.append(f"{indent_str}    {stripped}")
+                                result_lines.append(f"{indent_str}    print('[LETS_GO_DEBUG] [SUCCESS] Клик выполнен успешно!', flush=True)")
+                                result_lines.append(f"{indent_str}except Exception as e:")
+                                result_lines.append(f"{indent_str}    print(f'[LETS_GO_DEBUG] [ERROR] Ошибка: {{type(e).__name__}}: {{e}}', flush=True)")
+                                result_lines.append(f"{indent_str}    # Пробуем альтернативные методы")
+                                result_lines.append(f"{indent_str}    print('[LETS_GO_DEBUG] Попытка force=True...', flush=True)")
+                                result_lines.append(f"{indent_str}    try:")
+                                result_lines.append(f"{indent_str}        page2.get_by_role('button', name=\"Let's go\").click(force=True, timeout=5000)")
+                                result_lines.append(f"{indent_str}        print('[LETS_GO_DEBUG] [SUCCESS] Force click сработал!', flush=True)")
+                                result_lines.append(f"{indent_str}    except Exception as e2:")
+                                result_lines.append(f"{indent_str}        print(f'[LETS_GO_DEBUG] [ERROR] Force click не сработал: {{e2}}', flush=True)")
+                                result_lines.append(f"{indent_str}        print('[LETS_GO_DEBUG] Попытка JavaScript click...', flush=True)")
+                                result_lines.append(f"{indent_str}        try:")
+                                result_lines.append(f"{indent_str}            page2.evaluate(\"document.querySelector('button[form=\\\\\"prefill_review_form\\\\\"]').click()\")")
+                                result_lines.append(f"{indent_str}            print('[LETS_GO_DEBUG] [SUCCESS] JavaScript click сработал!', flush=True)")
+                                result_lines.append(f"{indent_str}        except Exception as e3:")
+                                result_lines.append(f"{indent_str}            print(f'[CRASH] [ERROR] Все методы клика не сработали: {{e3}}', flush=True)")
+                                result_lines.append(f"{indent_str}            raise")
+                            else:
+                                # Обычный дебаг для page2/page3
+                                result_lines.append(f"{indent_str}print(f'[{current_page_context.upper()}_DEBUG] Действие: {stripped[:60]}...', flush=True)")
+                                result_lines.append(f"{indent_str}try:")
+                                result_lines.append(f"{indent_str}    {stripped}")
+                                result_lines.append(f"{indent_str}    print(f'[{current_page_context.upper()}_DEBUG] [OK] Действие выполнено', flush=True)")
+                                result_lines.append(f"{indent_str}except PlaywrightTimeout:")
+                                result_lines.append(f'{indent_str}    print(f"[{current_page_context.upper()}_DEBUG] [WARNING] Timeout - элемент не найден", flush=True)')
+                                result_lines.append(f'{indent_str}    print(f"[{current_page_context.upper()}_DEBUG] [INFO] Продолжаем выполнение...", flush=True)')
+                                result_lines.append(f"{indent_str}    pass")
+                        else:
+                            # Минимальный дебаг для page и page1
+                            result_lines.append(f"{indent_str}try:")
+                            result_lines.append(f"{indent_str}    {stripped}")
+                            result_lines.append(f"{indent_str}except PlaywrightTimeout:")
+                            # Только ошибки для page/page1
+                            result_lines.append(f'{indent_str}    print("[ACTION] [WARNING] Timeout - элемент не найден", flush=True)')
+                            result_lines.append(f"{indent_str}    pass")
+                            result_lines.append(f"{indent_str}except Exception as e:")
+                            # Всегда показываем критичные ошибки
+                            result_lines.append(f'{indent_str}    print(f"[CRASH] [ERROR] Критическая ошибка: {{type(e).__name__}}: {{e}}", flush=True)')
+                            result_lines.append(f"{indent_str}    raise")
             else:
                 # Не действие - оставляем как есть
                 result_lines.append(line)
