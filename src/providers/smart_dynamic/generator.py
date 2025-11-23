@@ -1671,8 +1671,8 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
                         result_lines.append(f"{indent_str}try:")
                         result_lines.append(f"{indent_str}    {stripped}")
                         result_lines.append(f"{indent_str}    print('[OPTIONAL] [OK] Element found and clicked', flush=True)")
-                        result_lines.append(f"{indent_str}except PlaywrightTimeout:")
-                        result_lines.append(f"{indent_str}    print('[OPTIONAL] [SKIP] Element not found (this is OK)', flush=True)")
+                        result_lines.append(f"{indent_str}except Exception as e:")
+                        result_lines.append(f"{indent_str}    print(f'[OPTIONAL] [SKIP] Element not found or error: {{type(e).__name__}} (this is OK)', flush=True)")
                         result_lines.append(f"{indent_str}    pass")
                         optional_next_action = False  # Сбрасываем флаг
                     else:
