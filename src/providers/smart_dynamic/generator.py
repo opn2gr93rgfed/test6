@@ -712,18 +712,45 @@ def scroll_to_element(page, selector, by_role=None, name=None, by_test_id=None, 
         """Проверяет видимость элемента"""
         try:
             if by_test_id:
-                element = page.get_by_test_id(by_test_id).first
+                locator = page.get_by_test_id(by_test_id)
+                print(f"[SCROLL_SEARCH] [DEBUG] Ищу по test_id='{by_test_id}'")
             elif by_role:
-                element = page.get_by_role(by_role, name=name).first
+                locator = page.get_by_role(by_role, name=name)
+                print(f"[SCROLL_SEARCH] [DEBUG] Ищу по role='{by_role}', name='{name}'")
             else:
-                element = page.locator(selector).first
+                locator = page.locator(selector)
+                print(f"[SCROLL_SEARCH] [DEBUG] Ищу по selector='{selector}'")
 
-            if element.is_visible(timeout=1000):
-                # Прокрутить к элементу
-                element.scroll_into_view_if_needed(timeout=2000)
-                time.sleep(0.5)
-                return True
-        except:
+            # Проверяем сколько элементов найдено
+            count = locator.count()
+            print(f"[SCROLL_SEARCH] [DEBUG] Найдено элементов: {count}")
+
+            if count == 0:
+                print(f"[SCROLL_SEARCH] [DEBUG] Элементов не найдено!")
+                return False
+
+            # Проверяем ВСЕ элементы, не только first
+            for i in range(count):
+                element = locator.nth(i)
+                print(f"[SCROLL_SEARCH] [DEBUG] Проверяю элемент #{i} is_visible(timeout=5000)...")
+                try:
+                    if element.is_visible(timeout=5000):
+                        print(f"[SCROLL_SEARCH] [DEBUG] Элемент #{i} ВИДИМЫЙ! Использую его.")
+                        # Прокрутить к элементу
+                        element.scroll_into_view_if_needed(timeout=2000)
+                        time.sleep(0.5)
+                        return True
+                    else:
+                        print(f"[SCROLL_SEARCH] [DEBUG] Элемент #{i} невидимый, пробую следующий...")
+                except:
+                    print(f"[SCROLL_SEARCH] [DEBUG] Элемент #{i} timeout/error, пробую следующий...")
+                    continue
+
+            print(f"[SCROLL_SEARCH] [DEBUG] Все {count} элементов проверены - все невидимые")
+            return False
+
+        except Exception as e:
+            print(f"[SCROLL_SEARCH] [DEBUG] Exception: {type(e).__name__}: {str(e)[:100]}")
             pass
         return False
 
