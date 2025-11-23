@@ -942,7 +942,7 @@ def load_processed_rows(results_file_path: str) -> set:
     return processed_rows
 
 
-def write_row_status(results_file_path: str, row_number: int, status: str, start_time: str, end_time: str = "", error_msg: str = "", data_row: Dict = None):
+def write_row_status(results_file_path: str, row_number: int, status: str, start_time: str, end_time: str = "", error_msg: str = "", data_row: Dict = None, extracted_fields: Dict = None):
     """
     Записывает или обновляет статус обработки строки в файл результатов
 
@@ -954,6 +954,7 @@ def write_row_status(results_file_path: str, row_number: int, status: str, start
         end_time: Время завершения (пусто для "processing")
         error_msg: Сообщение об ошибке (для failed/error)
         data_row: Данные строки из CSV (для reference)
+        extracted_fields: Извлеченные поля из Network responses (словарь field_name: value)
     """
     import datetime
 
@@ -962,19 +963,22 @@ def write_row_status(results_file_path: str, row_number: int, status: str, start
 
     # Если файл существует, читаем его и ищем строку
     existing_rows = {}
+    base_fieldnames = ['row_number', 'status', 'start_time', 'end_time', 'error_msg', 'data']
+
     if file_exists:
         try:
             with open(results_file_path, 'r', encoding='utf-8') as f:
                 reader = csv.DictReader(f)
-                fieldnames = reader.fieldnames
+                fieldnames = list(reader.fieldnames) if reader.fieldnames else base_fieldnames
                 for row in reader:
                     if 'row_number' in row:
                         existing_rows[int(row['row_number'])] = row
         except Exception as e:
             print(f"[RESULTS] [WARNING] Ошибка чтения результатов для обновления: {e}")
             existing_rows = {}
+            fieldnames = base_fieldnames
     else:
-        fieldnames = ['row_number', 'status', 'start_time', 'end_time', 'error_msg', 'data']
+        fieldnames = base_fieldnames
 
     # Создаем или обновляем запись
     row_data = {
@@ -985,6 +989,18 @@ def write_row_status(results_file_path: str, row_number: int, status: str, start
         'error_msg': error_msg,
         'data': json.dumps(data_row, ensure_ascii=False) if data_row else ""
     }
+
+    # 🌐 Добавляем извлеченные поля из Network responses
+    if extracted_fields:
+        for field_name, field_value in extracted_fields.items():
+            # Добавляем колонку если ее еще нет
+            if field_name not in fieldnames:
+                fieldnames.append(field_name)
+                print(f"[RESULTS] [NETWORK] Добавлена новая колонка: {field_name}", flush=True)
+
+            # Записываем значение
+            row_data[field_name] = str(field_value)
+            print(f"[RESULTS] [NETWORK] Строка {row_number}: {field_name} = {field_value}", flush=True)
 
     existing_rows[row_number] = row_data
 
@@ -1384,6 +1400,145 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
         pre_code_clean = self._clean_code_section(pre_questions_code)
         post_code_clean = self._clean_code_section(post_questions_code)
 
+        # 🌐 Парсинг и генерация network capture кода
+        network_capture_code = ""
+        network_return_code = ""
+
+        if network_capture_patterns and len(network_capture_patterns) > 0:
+            # Парсим паттерны формата "pattern:field1,field2" или просто "pattern"
+            parsed_patterns = []
+            current_pattern = None
+            current_fields = []
+
+            for item in network_capture_patterns:
+                if ':' in item:
+                    # Новый паттерн с полями: "validate:bind_profile.drivers.0.model"
+                    if current_pattern:
+                        # Сохраняем предыдущий паттерн
+                        parsed_patterns.append({'pattern': current_pattern, 'fields': current_fields})
+
+                    pattern, field = item.split(':', 1)
+                    current_pattern = pattern.strip()
+                    current_fields = [field.strip()]
+                elif current_pattern:
+                    # Продолжение полей для текущего паттерна
+                    current_fields.append(item.strip())
+                else:
+                    # Паттерн без полей
+                    parsed_patterns.append({'pattern': item.strip(), 'fields': []})
+
+            # Не забываем последний паттерн
+            if current_pattern:
+                parsed_patterns.append({'pattern': current_pattern, 'fields': current_fields})
+
+            patterns_str = json.dumps(parsed_patterns, ensure_ascii=False)
+
+            network_capture_code = f'''
+        # ============================================================
+        # 🌐 ЗАХВАТ NETWORK RESPONSES (Developer Tools) + ИЗВЛЕЧЕНИЕ ПОЛЕЙ
+        # ============================================================
+        captured_data = {{}}
+        extracted_fields = {{}}  # Словарь для извлеченных полей: {{field_name: value}}
+        capture_patterns_config = {patterns_str}
+
+        def get_nested_value(data, field_path):
+            """
+            Извлекает значение по пути field.subfield.subsubfield
+            Поддерживает массивы: field.array.0.subfield
+            """
+            keys = field_path.split('.')
+            value = data
+            for key in keys:
+                # Проверяем, является ли ключ числовым индексом для массива
+                if isinstance(value, list):
+                    try:
+                        index = int(key)
+                        if 0 <= index < len(value):
+                            value = value[index]
+                        else:
+                            return None
+                    except ValueError:
+                        return None
+                elif isinstance(value, dict) and key in value:
+                    value = value[key]
+                else:
+                    return None
+            return value
+
+        def handle_response(response):
+            """Обработчик network responses - перехватывает данные и извлекает указанные поля"""
+            try:
+                url = response.url
+                # Проверяем каждый паттерн из конфига
+                for pattern_config in capture_patterns_config:
+                    pattern = pattern_config.get('pattern', '')
+                    fields = pattern_config.get('fields', [])
+
+                    if pattern.lower() in url.lower():
+                        print(f"[NETWORK_CAPTURE] Перехвачен ответ: {{url}}", flush=True)
+                        try:
+                            # Получаем JSON данные из ответа
+                            json_data = response.json()
+
+                            # Сохраняем полные данные для отладки
+                            if pattern not in captured_data:
+                                captured_data[pattern] = []
+                            captured_data[pattern].append({{
+                                'url': url,
+                                'status': response.status,
+                                'data': json_data
+                            }})
+
+                            # 🔥 ИЗВЛЕЧЕНИЕ КОНКРЕТНЫХ ПОЛЕЙ
+                            if fields:
+                                print(f"[NETWORK_CAPTURE] Извлекаю поля: {{fields}}", flush=True)
+                                for field in fields:
+                                    field_value = get_nested_value(json_data, field)
+                                    if field_value is not None:
+                                        extracted_fields[field] = field_value
+                                        print(f"[NETWORK_CAPTURE]   {{field}} = {{field_value}}", flush=True)
+                                    else:
+                                        print(f"[NETWORK_CAPTURE]   {{field}} не найдено в response", flush=True)
+                            else:
+                                # Если полей нет - сохраняем весь response
+                                print(f"[NETWORK_CAPTURE] Полный response сохранен для '{{pattern}}'", flush=True)
+                                print(f"[NETWORK_CAPTURE] Preview: {{str(json_data)[:200]}}...", flush=True)
+                        except Exception as e:
+                            print(f"[NETWORK_CAPTURE] Не удалось распарсить JSON: {{e}}", flush=True)
+                        break
+            except Exception as e:
+                # Игнорируем ошибки при обработке - не должны ломать основной флоу
+                pass
+
+        # Регистрируем обработчик для всех network responses
+        page.on("response", handle_response)
+        print("[NETWORK_CAPTURE] Обработчик зарегистрирован", flush=True)
+        print(f"[NETWORK_CAPTURE] Паттерны и поля: {{capture_patterns_config}}", flush=True)
+'''
+
+            network_return_code = '''
+        # 🌐 Вывод захваченных данных (если есть)
+        if captured_data:
+            print(f"\\n[NETWORK_CAPTURE] === ИТОГОВЫЕ ДАННЫЕ ===")
+            for pattern, entries in captured_data.items():
+                print(f"[NETWORK_CAPTURE] Паттерн '{{pattern}}': {{len(entries)}} ответов")
+                for i, entry in enumerate(entries, 1):
+                    print(f"[NETWORK_CAPTURE]   {{i}}. URL: {{entry['url']}}")
+                    print(f"[NETWORK_CAPTURE]      Status: {{entry['status']}}")
+                    print(f"[NETWORK_CAPTURE]      Data keys: {{list(entry['data'].keys()) if isinstance(entry['data'], dict) else 'Not a dict'}}")
+
+        if extracted_fields:
+            print(f"[NETWORK_CAPTURE] Извлеченные поля: {{extracted_fields}}", flush=True)
+
+        print(f"[ITERATION {{iteration_number}}] [OK] Завершено успешно")
+        return (True, extracted_fields)
+'''
+        else:
+            network_return_code = '''
+        print(f"[ITERATION {{iteration_number}}] [OK] Завершено успешно")
+        return (True, {{}})
+'''
+
         return f'''# ============================================================
 # ОСНОВНАЯ ФУНКЦИЯ ИТЕРАЦИИ
 # ============================================================
@@ -1396,12 +1551,15 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
         page: Playwright page
         data_row: Данные из CSV
         iteration_number: Номер итерации
+
+    Returns:
+        Tuple (success: bool, extracted_fields: dict)
     """
     print(f"\\n{'='*60}")
     print(f"[ITERATION {{iteration_number}}] Начало")
     print(f"{'='*60}")
 
-    try:
+    try:{network_capture_code}
         # ============================================================
         # НАЧАЛЬНЫЕ ДЕЙСТВИЯ (до вопросов)
         # ============================================================
@@ -1417,15 +1575,12 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
         # ДЕЙСТВИЯ ПОСЛЕ ВОПРОСОВ (popup окна, финальные действия)
         # ============================================================
 {self._indent_code(post_code_clean, 8)}
-
-        print(f"[ITERATION {{iteration_number}}] [OK] Завершено успешно")
-        return True
-
+{network_return_code}
     except Exception as e:
         print(f"[ITERATION {{iteration_number}}] [ERROR] Ошибка: {{e}}")
         import traceback
         traceback.print_exc()
-        return False
+        return (False, {{}})
 
 
 '''
@@ -1958,9 +2113,10 @@ def process_task(task_data: tuple) -> Dict:
             page.set_default_timeout(DEFAULT_TIMEOUT)
             page.set_default_navigation_timeout(NAVIGATION_TIMEOUT)
 
-            iteration_result = run_iteration(page, data_row, iteration_number)
+            # run_iteration теперь возвращает tuple (success, extracted_fields)
+            iteration_success, extracted_fields = run_iteration(page, data_row, iteration_number)
 
-            if iteration_result:
+            if iteration_success:
                 result['success'] = True
             else:
                 result['error'] = "Iteration failed"
@@ -1970,10 +2126,10 @@ def process_task(task_data: tuple) -> Dict:
 
         stop_profile(profile_uuid)
 
-        # Записываем финальный статус
+        # Записываем финальный статус с extracted_fields
         end_time = datetime.datetime.now().isoformat()
         if result['success']:
-            write_row_status(results_file_path, row_number, "success", start_time, end_time, data_row=data_row)
+            write_row_status(results_file_path, row_number, "success", start_time, end_time, data_row=data_row, extracted_fields=extracted_fields)
             print(f"[PROGRESS] Строка {row_number} отмечена как 'success'")
         else:
             write_row_status(results_file_path, row_number, "failed", start_time, end_time, error_msg=result.get('error', 'Unknown error'), data_row=data_row)
