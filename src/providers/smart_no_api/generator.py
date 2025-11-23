@@ -925,8 +925,9 @@ def load_csv_data() -> List[Dict]:
         import re
         # Заменить .fill(...) на .press_sequentially(..., delay=X)
         # Паттерн: .fill("text") или .fill('text') или .fill(variable)
+        # ВАЖНО: typing_delay в миллисекундах, но Playwright ожидает секунды
         pattern = r'\.fill\(([^)]+)\)'
-        replacement = f'.press_sequentially(\\1, delay={self.typing_delay})'
+        replacement = f'.press_sequentially(\\1, delay={self.typing_delay / 1000})'
         return re.sub(pattern, replacement, code)
 
     def _wrap_actions_for_resilience(self, code: str) -> str:

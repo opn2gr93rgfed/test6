@@ -979,7 +979,11 @@ QUESTIONS_POOL = {pool_json}
         """
         Генерирует функцию answer_questions() для моментального поиска и ответа
         """
-        return '''# ============================================================
+        # Конвертируем typing_delay из миллисекунд в секунды для Playwright
+        typing_delay_sec = self.typing_delay / 1000
+        action_delay_sec = self.action_delay
+
+        code = '''# ============================================================
 # ФУНКЦИЯ МОМЕНТАЛЬНОГО ПОИСКА И ОТВЕТА НА ВОПРОСЫ
 # ============================================================
 
@@ -1143,7 +1147,7 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
                                 button_text = action.get('value')
                                 print(f"[DYNAMIC_QA]   -> Кликаю кнопку: {button_text}")
                                 page.get_by_role("button", name=button_text).click(timeout=10000)
-                                time.sleep({self.action_delay})
+                                time.sleep(__ACTION_DELAY__)
 
                             # Заполнение текстового поля
                             elif action_type == 'textbox_fill':
@@ -1156,22 +1160,22 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
                                 print(f"[DYNAMIC_QA]   -> Заполняю поле '{field_name}': {value}")
                                 textbox = page.get_by_role("textbox", name=field_name).first
                                 textbox.click(timeout=5000)
-                                textbox.press_sequentially(value, delay={self.typing_delay})
-                                time.sleep({self.action_delay})
+                                textbox.press_sequentially(value, delay=__TYPING_DELAY__)
+                                time.sleep(__ACTION_DELAY__)
 
                             # Нажатие клавиши
                             elif action_type == 'press_key':
                                 key = action.get('key')
                                 print(f"[DYNAMIC_QA]   -> Нажимаю клавишу: {key}")
                                 page.keyboard.press(key)
-                                time.sleep({self.action_delay})
+                                time.sleep(__ACTION_DELAY__)
 
                             # Клик по locator
                             elif action_type == 'locator_click':
                                 selector = action.get('selector')
                                 print(f"[DYNAMIC_QA]   -> Кликаю элемент: {selector[:50]}...")
                                 page.locator(selector).first.click(timeout=10000)
-                                time.sleep({self.action_delay})
+                                time.sleep(__ACTION_DELAY__)
 
                         except Exception as e:
                             print(f"[DYNAMIC_QA]   [ERROR] Не удалось выполнить действие: {e}")
@@ -1234,6 +1238,12 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
 
 
 '''
+
+        # Подставляем реальные значения вместо плейсхолдеров
+        code = code.replace('__TYPING_DELAY__', str(typing_delay_sec))
+        code = code.replace('__ACTION_DELAY__', str(action_delay_sec))
+
+        return code
 
     def _generate_main_iteration(self, pre_questions_code: str, post_questions_code: str, network_capture_patterns: List) -> str:
         """
@@ -1344,8 +1354,18 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
 
         Оборачивает клики, fill и другие действия в try-except или retry логику
         """
+        import re  # Импортируем в начале функции, т.к. используется в нескольких местах
+
         if not code or not code.strip():
             return code
+
+        # ВАЖНО: Заменяем .fill() на .press_sequentially() с симуляцией ввода
+        if self.simulate_typing and '.fill(' in code:
+            typing_delay_sec = self.typing_delay / 1000  # Конвертация мс в секунды
+            # Паттерн: .fill("text") или .fill('text') или .fill(variable)
+            pattern = r'\.fill\(([^)]+)\)'
+            replacement = f'.press_sequentially(\\1, delay={typing_delay_sec})'
+            code = re.sub(pattern, replacement, code)
 
         lines = code.split('\n')
         result_lines = []
