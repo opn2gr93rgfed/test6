@@ -1715,8 +1715,8 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
                                 result_lines.append(f"{indent_str}            print(f'[CRASH] [ERROR] Все методы клика не сработали: {{e3}}', flush=True)")
                                 result_lines.append(f"{indent_str}            raise")
                             else:
-                                # Обычный дебаг для page2/page3
-                                result_lines.append(f"{indent_str}print(f'[{current_page_context.upper()}_DEBUG] Действие: {stripped[:60]}...', flush=True)")
+                                # Обычный дебаг для page2/page3 (без вывода кода - чтобы избежать проблем с кавычками)
+                                result_lines.append(f"{indent_str}print(f'[{current_page_context.upper()}_DEBUG] Выполнение действия...', flush=True)")
                                 result_lines.append(f"{indent_str}try:")
                                 result_lines.append(f"{indent_str}    {stripped}")
                                 result_lines.append(f"{indent_str}    print(f'[{current_page_context.upper()}_DEBUG] [OK] Действие выполнено', flush=True)")
