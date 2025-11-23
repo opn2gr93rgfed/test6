@@ -1357,6 +1357,15 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
         if not code or not code.strip():
             return code
 
+        # ВАЖНО: Заменяем .fill() на .press_sequentially() с симуляцией ввода
+        if self.simulate_typing and '.fill(' in code:
+            import re
+            typing_delay_sec = self.typing_delay / 1000  # Конвертация мс в секунды
+            # Паттерн: .fill("text") или .fill('text') или .fill(variable)
+            pattern = r'\.fill\(([^)]+)\)'
+            replacement = f'.press_sequentially(\\1, delay={typing_delay_sec})'
+            code = re.sub(pattern, replacement, code)
+
         lines = code.split('\n')
         result_lines = []
         i = 0
