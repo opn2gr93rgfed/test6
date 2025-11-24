@@ -1538,19 +1538,8 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
                 if '/api/' in url or '/bind' in url or response.request.resource_type == 'xhr':
                     print(f"[NETWORK_DEBUG] API Request: {{response.status}} {{url}}", flush=True)
 
-                # 🔥 ЖЕСТКАЯ ПРОВЕРКА: Если это запрос validate - ОБЯЗАТЕЛЬНО сохраняем в файл
-                # ВАЖНО: Записываем ВСЕ validate запросы, без остановки!
-                # Проверяем:
-                # 1. Общая проверка: 'validate' в URL
-                # 2. ЖЕСТКИЙ URL: конкретный путь bind_api/web/validate
-                # 3. Домены: joinroot.com, joinroci.com, compare.com
-                is_validate = (
-                    'validate' in url.lower() or
-                    'bind_api/web/validate' in url or
-                    ('joinroot.com' in url and '/bind' in url) or
-                    ('joinroci.com' in url and '/bind' in url) or
-                    ('compare.com' in url and '/validate' in url)
-                )
+                # ТОЧНАЯ ПРОВЕРКА: Сохраняем ТОЛЬКО запросы с конкретного URL
+                is_validate = url == 'https://app.joinroot.com/bind_api/web/validate'
 
                 if is_validate:
                     validate_counter += 1
