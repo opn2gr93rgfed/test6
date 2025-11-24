@@ -1536,7 +1536,7 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
                 # ВАЖНО: Записываем ВСЕ validate запросы, без остановки!
                 if 'validate' in url.lower():
                     validate_counter += 1
-                    print(f"[NETWORK_CAPTURE] [VALIDATE #{validate_counter}] Перехвачен validate запрос: {{url}}", flush=True)
+                    print(f"[NETWORK_CAPTURE] [VALIDATE #{{validate_counter}}] Перехвачен validate запрос: {{url}}", flush=True)
                     try:
                         json_data = response.json()
                         saved_file = save_network_response_to_file(
@@ -1545,14 +1545,14 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
                             status=response.status,
                             json_data=json_data,
                             iteration_num=iteration_number,
-                            counter=validate_counter
+                            counter={{validate_counter}}
                         )
                         if saved_file:
-                            print(f"[NETWORK_CAPTURE] [OK] Validate #{validate_counter} сохранен: {{saved_file}}", flush=True)
+                            print(f"[NETWORK_CAPTURE] [OK] Validate #{{validate_counter}} сохранен: {{saved_file}}", flush=True)
                         else:
-                            print(f"[NETWORK_CAPTURE] [ERROR] Validate #{validate_counter} НЕ сохранен!", flush=True)
+                            print(f"[NETWORK_CAPTURE] [ERROR] Validate #{{validate_counter}} НЕ сохранен!", flush=True)
                     except Exception as e:
-                        print(f"[NETWORK_CAPTURE] [ERROR] Ошибка сохранения validate #{validate_counter}: {{e}}", flush=True)
+                        print(f"[NETWORK_CAPTURE] [ERROR] Ошибка сохранения validate #{{validate_counter}}: {{e}}", flush=True)
 
                 # Дополнительно проверяем паттерны (если они заданы)
                 if capture_patterns_config:
