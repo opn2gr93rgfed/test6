@@ -37,6 +37,8 @@ ENV/
 config.json
 generated_scripts/*.py
 !generated_scripts/.gitkeep
+network_responses/
+test_network_capture.py
 
 # OS
 .DS_Store
