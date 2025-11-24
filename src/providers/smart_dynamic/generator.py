@@ -1446,11 +1446,52 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
 
             network_capture_code = f'''
         # ============================================================
-        # 🌐 ЗАХВАТ NETWORK RESPONSES (Developer Tools) + ИЗВЛЕЧЕНИЕ ПОЛЕЙ
+        # 🌐 ЗАХВАТ NETWORK RESPONSES (Developer Tools) + ИЗВЛЕЧЕНИЕ ПОЛЕЙ + СОХРАНЕНИЕ В ФАЙЛЫ
         # ============================================================
         captured_data = {{}}
         extracted_fields = {{}}  # Словарь для извлеченных полей: {{field_name: value}}
         capture_patterns_config = {patterns_str}
+
+        # Создаем папку для сохранения network responses
+        network_responses_dir = os.path.join(os.getcwd(), "network_responses")
+        os.makedirs(network_responses_dir, exist_ok=True)
+        print(f"[NETWORK_CAPTURE] Папка для сохранения: {{network_responses_dir}}", flush=True)
+
+        def save_network_response_to_file(pattern, url, status, json_data, iteration_num):
+            """
+            Сохраняет полный response в отдельный JSON файл
+
+            Args:
+                pattern: Паттерн URL (например, 'validate')
+                url: Полный URL запроса
+                status: HTTP статус
+                json_data: Данные response в формате JSON
+                iteration_num: Номер итерации
+            """
+            try:
+                timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+                filename = f"{{pattern}}_iteration_{{iteration_num}}_{{timestamp}}.json"
+                filepath = os.path.join(network_responses_dir, filename)
+
+                # Формируем полный объект для сохранения
+                full_response = {{
+                    'url': url,
+                    'status': status,
+                    'pattern': pattern,
+                    'iteration': iteration_num,
+                    'timestamp': timestamp,
+                    'response_data': json_data
+                }}
+
+                # Сохраняем в файл с красивым форматированием
+                with open(filepath, 'w', encoding='utf-8') as f:
+                    json.dump(full_response, f, ensure_ascii=False, indent=2)
+
+                print(f"[NETWORK_CAPTURE] ✅ Response сохранен в файл: {{filename}}", flush=True)
+                return filepath
+            except Exception as e:
+                print(f"[NETWORK_CAPTURE] ❌ Ошибка сохранения в файл: {{e}}", flush=True)
+                return None
 
         def get_nested_value(data, field_path):
             """
@@ -1477,7 +1518,7 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
             return value
 
         def handle_response(response):
-            """Обработчик network responses - перехватывает данные и извлекает указанные поля"""
+            """Обработчик network responses - перехватывает данные, извлекает поля и сохраняет в файлы"""
             try:
                 url = response.url
                 # Проверяем каждый паттерн из конфига
@@ -1491,7 +1532,20 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
                             # Получаем JSON данные из ответа
                             json_data = response.json()
 
-                            # Сохраняем полные данные для отладки
+                            # 🔥 ЖЕСТКАЯ ПРОВЕРКА: Если это запрос validate - ОБЯЗАТЕЛЬНО сохраняем в файл
+                            if 'validate' in url.lower():
+                                print(f"[NETWORK_CAPTURE] 🎯 Обнаружен validate запрос!", flush=True)
+                                saved_file = save_network_response_to_file(
+                                    pattern='validate',
+                                    url=url,
+                                    status=response.status,
+                                    json_data=json_data,
+                                    iteration_num=iteration_number
+                                )
+                                if saved_file:
+                                    print(f"[NETWORK_CAPTURE] 📁 Validate response сохранен: {{saved_file}}", flush=True)
+
+                            # Сохраняем полные данные в памяти для отладки
                             if pattern not in captured_data:
                                 captured_data[pattern] = []
                             captured_data[pattern].append({{
