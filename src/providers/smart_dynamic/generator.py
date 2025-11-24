@@ -1410,26 +1410,37 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
             current_pattern = None
             current_fields = []
 
-            for item in network_capture_patterns:
-                if ':' in item:
-                    # Новый паттерн с полями: "validate:bind_profile.drivers.0.model"
-                    if current_pattern:
-                        # Сохраняем предыдущий паттерн
-                        parsed_patterns.append({'pattern': current_pattern, 'fields': current_fields})
+            try:
+                for item in network_capture_patterns:
+                    # Пропускаем не-строковые элементы (на случай ошибки конфигурации)
+                    if not isinstance(item, str):
+                        print(f"[WARNING] network_capture_patterns содержит не-строковый элемент: {type(item)} = {item}")
+                        continue
 
-                    pattern, field = item.split(':', 1)
-                    current_pattern = pattern.strip()
-                    current_fields = [field.strip()]
-                elif current_pattern:
-                    # Продолжение полей для текущего паттерна
-                    current_fields.append(item.strip())
-                else:
-                    # Паттерн без полей
-                    parsed_patterns.append({'pattern': item.strip(), 'fields': []})
+                    if ':' in item:
+                        # Новый паттерн с полями: "validate:bind_profile.drivers.0.model"
+                        if current_pattern:
+                            # Сохраняем предыдущий паттерн
+                            parsed_patterns.append({'pattern': current_pattern, 'fields': current_fields})
 
-            # Не забываем последний паттерн
-            if current_pattern:
-                parsed_patterns.append({'pattern': current_pattern, 'fields': current_fields})
+                        pattern, field = item.split(':', 1)
+                        current_pattern = pattern.strip()
+                        current_fields = [field.strip()]
+                    elif current_pattern:
+                        # Продолжение полей для текущего паттерна
+                        current_fields.append(item.strip())
+                    else:
+                        # Паттерн без полей
+                        parsed_patterns.append({'pattern': item.strip(), 'fields': []})
+
+                # Не забываем последний паттерн
+                if current_pattern:
+                    parsed_patterns.append({'pattern': current_pattern, 'fields': current_fields})
+
+            except Exception as e:
+                print(f"[ERROR] Ошибка парсинга network_capture_patterns: {e}")
+                print(f"[ERROR] network_capture_patterns = {network_capture_patterns}")
+                parsed_patterns = []
 
             patterns_str = json.dumps(parsed_patterns, ensure_ascii=False)
 
