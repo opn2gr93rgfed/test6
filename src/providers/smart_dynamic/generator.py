@@ -111,6 +111,17 @@ class Generator:
             ]):
                 continue
 
+            # Специальные команды перед popup (#try_popup, #optional, etc) - добавляем в post section
+            if stripped.startswith('#') and any(cmd in stripped.lower() for cmd in ['#try_popup', '#optional', '#pause', '#scroll']):
+                # Проверяем, что следующая строка - popup блок
+                next_idx = i + 1
+                while next_idx < len(lines) and not lines[next_idx].strip():
+                    next_idx += 1
+                if next_idx < len(lines) and 'with page.expect_popup()' in lines[next_idx]:
+                    # Это команда перед popup - добавляем в post section
+                    post_questions_lines.append(line)
+                    continue
+
             # Отслеживание popup окон - переключаем в post_section
             if 'with page.expect_popup()' in stripped or '= page1_info.value' in stripped:
                 in_post_section = True
@@ -1742,8 +1753,8 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
             return code
 
         # ВАЖНО: Заменяем .fill() на .press_sequentially() с симуляцией ввода
-        if self.simulate_typing and '.fill(' in code:
-            typing_delay_sec = self.typing_delay / 1000  # Конвертация мс в секунды
+        if getattr(self, 'simulate_typing', True) and '.fill(' in code:
+            typing_delay_sec = getattr(self, 'typing_delay', 100) / 1000  # Конвертация мс в секунды
             # Паттерн: .fill("text") или .fill('text') или .fill(variable)
             pattern = r'\.fill\(([^)]+)\)'
             replacement = f'.press_sequentially(\\1, delay={typing_delay_sec})'
@@ -1760,6 +1771,10 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
         retry_attempts = 3  # Количество попыток для #retry
         retry_wait = 30  # Время ожидания между попытками (сек)
         retry_scroll_search = False  # Использовать ли scroll_search в retry
+        try_popup_next = False  # Флаг для #try_popup - оборачивает следующий with page.expect_popup() в try/except
+        inside_try_popup_block = False  # Отслеживание что мы внутри try/except блока для popup
+        try_popup_indent = 0  # Отступ для try блока
+        try_popup_page_var = None  # Переменная страницы (page1, page2, page3) для fallback в except
         current_page_context = 'page'  # Отслеживание текущего контекста страницы (page, page1, page2, page3)
 
         while i < len(lines):
@@ -1778,33 +1793,98 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
             # Отслеживание переключения контекста страницы
             if '= page1_info.value' in stripped:
                 current_page_context = 'page1'
-                result_lines.append(line)
+                # Если внутри try_popup блока - добавляем отступ
+                if inside_try_popup_block and try_popup_page_var == 'page1':
+                    result_lines.append(' ' * (current_indent + 4) + stripped)
+                else:
+                    result_lines.append(line)
+                # Если это конец try блока для popup - добавляем except
+                if inside_try_popup_block and try_popup_page_var == 'page1':
+                    except_indent = ' ' * try_popup_indent
+                    result_lines.append(f"{except_indent}    print('[TRY_POPUP] ✓ Popup opened successfully', flush=True)")
+                    result_lines.append(f"{except_indent}except Exception as e:")
+                    result_lines.append(f"{except_indent}    print(f'[TRY_POPUP] ✗ Popup did not open: {{type(e).__name__}}', flush=True)")
+                    result_lines.append(f"{except_indent}    print('[TRY_POPUP] → Using current page as fallback', flush=True)")
+                    result_lines.append(f"{except_indent}    page1 = page")
+                    inside_try_popup_block = False
+                    try_popup_page_var = None
                 i += 1
                 continue
             elif '= page2_info.value' in stripped:
                 current_page_context = 'page2'
+                # Если внутри try_popup блока - добавляем отступ
+                if inside_try_popup_block and try_popup_page_var == 'page2':
+                    result_lines.append(' ' * (current_indent + 4) + stripped)
+                    indent_str = ' ' * (current_indent + 4)
+                else:
+                    result_lines.append(line)
+                    indent_str = ' ' * current_indent
                 # Добавляем дебаг маркер для page2
-                indent_str = ' ' * current_indent
-                result_lines.append(line)
                 result_lines.append(f"{indent_str}print('[PAGE2_DEBUG] ===== НАЧАЛО РАБОТЫ С PAGE2 =====', flush=True)")
+                # Если это конец try блока для popup - добавляем except
+                if inside_try_popup_block and try_popup_page_var == 'page2':
+                    except_indent = ' ' * try_popup_indent
+                    result_lines.append(f"{except_indent}    print('[TRY_POPUP] ✓ Popup opened successfully', flush=True)")
+                    result_lines.append(f"{except_indent}except Exception as e:")
+                    result_lines.append(f"{except_indent}    print(f'[TRY_POPUP] ✗ Popup did not open: {{type(e).__name__}}', flush=True)")
+                    result_lines.append(f"{except_indent}    print('[TRY_POPUP] → Using current page as fallback', flush=True)")
+                    result_lines.append(f"{except_indent}    page2 = page")
+                    inside_try_popup_block = False
+                    try_popup_page_var = None
                 i += 1
                 continue
             elif '= page3_info.value' in stripped:
                 current_page_context = 'page3'
+                # Если внутри try_popup блока - добавляем отступ
+                if inside_try_popup_block and try_popup_page_var == 'page3':
+                    result_lines.append(' ' * (current_indent + 4) + stripped)
+                    indent_str = ' ' * (current_indent + 4)
+                else:
+                    result_lines.append(line)
+                    indent_str = ' ' * current_indent
                 # Добавляем дебаг маркер для page3
-                indent_str = ' ' * current_indent
-                result_lines.append(line)
                 result_lines.append(f"{indent_str}print('[PAGE3_DEBUG] ===== НАЧАЛО РАБОТЫ С PAGE3 =====', flush=True)")
+                # Если это конец try блока для popup - добавляем except
+                if inside_try_popup_block and try_popup_page_var == 'page3':
+                    except_indent = ' ' * try_popup_indent
+                    result_lines.append(f"{except_indent}    print('[TRY_POPUP] ✓ Popup opened successfully', flush=True)")
+                    result_lines.append(f"{except_indent}except Exception as e:")
+                    result_lines.append(f"{except_indent}    print(f'[TRY_POPUP] ✗ Popup did not open: {{type(e).__name__}}', flush=True)")
+                    result_lines.append(f"{except_indent}    print('[TRY_POPUP] → Using current page as fallback', flush=True)")
+                    result_lines.append(f"{except_indent}    page3 = page")
+                    inside_try_popup_block = False
+                    try_popup_page_var = None
                 i += 1
                 continue
 
             # Отслеживаем вход в with блок
             if stripped.startswith('with '):
-                result_lines.append(line)
-                inside_with_block = True
-                with_block_indent = current_indent
-                i += 1
-                continue
+                # Проверяем, нужно ли обернуть with page.expect_popup() в try/except
+                if try_popup_next and 'page.expect_popup()' in stripped:
+                    # Извлекаем имя переменной (page1_info, page2_info, page3_info)
+                    popup_match = re.search(r'as\s+(\w+):', stripped)
+                    if popup_match:
+                        popup_info_var = popup_match.group(1)  # например "page1_info"
+                        try_popup_page_var = popup_info_var.replace('_info', '')  # например "page1"
+
+                    # Добавляем try: с таким же отступом
+                    indent_str = ' ' * current_indent
+                    result_lines.append(f"{indent_str}try:")
+                    result_lines.append(f"{indent_str}    {stripped}")  # with блок с дополнительным отступом
+                    inside_with_block = True
+                    with_block_indent = current_indent + 4  # Увеличиваем отступ из-за try
+                    inside_try_popup_block = True
+                    try_popup_indent = current_indent
+                    try_popup_next = False  # Сбрасываем флаг
+                    i += 1
+                    continue
+                else:
+                    # Обычный with блок без try/except
+                    result_lines.append(line)
+                    inside_with_block = True
+                    with_block_indent = current_indent
+                    i += 1
+                    continue
 
             # Отслеживаем выход из with блока
             if inside_with_block and current_indent <= with_block_indent and not stripped.startswith('with '):
@@ -1870,6 +1950,13 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
                     i += 1
                     continue
 
+                # #try_popup - оборачивает следующий with page.expect_popup() в try/except
+                if special_cmd == '#try_popup':
+                    try_popup_next = True
+                    result_lines.append(f"{indent_str}# Try/catch for unstable popup (may not open)")
+                    i += 1
+                    continue
+
                 # #retry - повторять попытки найти элемент с ожиданием между попытками
                 # Синтаксис: #retry или #retry:N или #retry:N:S или #retry:N:S:scroll_search
                 # N - количество попыток (default: 3)
@@ -1910,8 +1997,11 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
             ])
 
             if is_action:
-                # Получаем индент
+                # Получаем индент (учитываем дополнительный отступ для try_popup блока)
                 indent_str = ' ' * current_indent
+                if inside_try_popup_block and inside_with_block:
+                    # Внутри try { with { ...здесь... } } - нужен дополнительный отступ
+                    indent_str = ' ' * (current_indent + 4)
 
                 # Если установлен флаг scroll_next_action - добавляем scroll_to_element() перед действием
                 if scroll_next_action:
