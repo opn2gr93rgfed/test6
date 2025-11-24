@@ -1601,7 +1601,7 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
         else:
             network_return_code = '''
         print(f"[ITERATION {{iteration_number}}] [OK] Завершено успешно")
-        return (True, {{}})
+        return (True, {})
 '''
 
         return f'''# ============================================================
