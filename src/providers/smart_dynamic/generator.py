@@ -1563,7 +1563,7 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
                             status=response.status,
                             json_data=json_data,
                             iteration_num=iteration_number,
-                            counter={{validate_counter}}
+                            counter=validate_counter
                         )
                         if saved_file:
                             print(f"[NETWORK_CAPTURE] [OK] Validate #{{validate_counter}} сохранен: {{saved_file}}", flush=True)
