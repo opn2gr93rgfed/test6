@@ -1801,10 +1801,10 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
                 # Если это конец try блока для popup - добавляем except
                 if inside_try_popup_block and try_popup_page_var == 'page1':
                     except_indent = ' ' * try_popup_indent
-                    result_lines.append(f"{except_indent}    print('[TRY_POPUP] ✓ Popup opened successfully', flush=True)")
+                    result_lines.append(f"{except_indent}    print('[TRY_POPUP] [OK] Popup opened successfully', flush=True)")
                     result_lines.append(f"{except_indent}except Exception as e:")
-                    result_lines.append(f"{except_indent}    print(f'[TRY_POPUP] ✗ Popup did not open: {{type(e).__name__}}', flush=True)")
-                    result_lines.append(f"{except_indent}    print('[TRY_POPUP] → Using current page as fallback', flush=True)")
+                    result_lines.append(f"{except_indent}    print(f'[TRY_POPUP] [ERROR] Popup did not open: {{type(e).__name__}}', flush=True)")
+                    result_lines.append(f"{except_indent}    print('[TRY_POPUP] Using current page as fallback', flush=True)")
                     result_lines.append(f"{except_indent}    page1 = page")
                     inside_try_popup_block = False
                     try_popup_page_var = None
@@ -1824,10 +1824,10 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
                 # Если это конец try блока для popup - добавляем except
                 if inside_try_popup_block and try_popup_page_var == 'page2':
                     except_indent = ' ' * try_popup_indent
-                    result_lines.append(f"{except_indent}    print('[TRY_POPUP] ✓ Popup opened successfully', flush=True)")
+                    result_lines.append(f"{except_indent}    print('[TRY_POPUP] [OK] Popup opened successfully', flush=True)")
                     result_lines.append(f"{except_indent}except Exception as e:")
-                    result_lines.append(f"{except_indent}    print(f'[TRY_POPUP] ✗ Popup did not open: {{type(e).__name__}}', flush=True)")
-                    result_lines.append(f"{except_indent}    print('[TRY_POPUP] → Using current page as fallback', flush=True)")
+                    result_lines.append(f"{except_indent}    print(f'[TRY_POPUP] [ERROR] Popup did not open: {{type(e).__name__}}', flush=True)")
+                    result_lines.append(f"{except_indent}    print('[TRY_POPUP] Using current page as fallback', flush=True)")
                     result_lines.append(f"{except_indent}    page2 = page")
                     inside_try_popup_block = False
                     try_popup_page_var = None
@@ -1847,10 +1847,10 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
                 # Если это конец try блока для popup - добавляем except
                 if inside_try_popup_block and try_popup_page_var == 'page3':
                     except_indent = ' ' * try_popup_indent
-                    result_lines.append(f"{except_indent}    print('[TRY_POPUP] ✓ Popup opened successfully', flush=True)")
+                    result_lines.append(f"{except_indent}    print('[TRY_POPUP] [OK] Popup opened successfully', flush=True)")
                     result_lines.append(f"{except_indent}except Exception as e:")
-                    result_lines.append(f"{except_indent}    print(f'[TRY_POPUP] ✗ Popup did not open: {{type(e).__name__}}', flush=True)")
-                    result_lines.append(f"{except_indent}    print('[TRY_POPUP] → Using current page as fallback', flush=True)")
+                    result_lines.append(f"{except_indent}    print(f'[TRY_POPUP] [ERROR] Popup did not open: {{type(e).__name__}}', flush=True)")
+                    result_lines.append(f"{except_indent}    print('[TRY_POPUP] Using current page as fallback', flush=True)")
                     result_lines.append(f"{except_indent}    page3 = page")
                     inside_try_popup_block = False
                     try_popup_page_var = None
