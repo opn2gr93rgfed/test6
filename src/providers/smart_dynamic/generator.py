@@ -334,15 +334,18 @@ Provider: smart_dynamic (DYNAMIC QUESTION ANSWERING + OCTOBROWSER API + PROXY + 
 - Работает с динамическим порядком вопросов (может быть любой!)
 - Поддержка до 100+ вопросов без потери производительности
 - Octobrowser API + прокси + многопоточность
+- Автоматическое отслеживание прогресса (не обрабатывает повторно уже выполненные строки)
 """
 
 import csv
+import json
 import time
 import requests
 import threading
 import random
 import re
 import os
+import datetime
 from tkinter import Tk, filedialog
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from playwright.sync_api import sync_playwright, expect, TimeoutError as PlaywrightTimeout
@@ -906,11 +909,123 @@ def execute_special_command(command: str, page, data_row: Dict):
     def _generate_csv_loader(self) -> str:
         """Копия из smart_no_api"""
         return '''# ============================================================
-# ЗАГРУЗКА CSV
+# ЗАГРУЗКА CSV И ОТСЛЕЖИВАНИЕ ПРОГРЕССА
 # ============================================================
 
-def load_csv_data() -> List[Dict]:
-    """Загрузить данные из CSV файла через диалог"""
+def load_processed_rows(results_file_path: str) -> set:
+    """
+    Читает файл результатов и возвращает set номеров уже обработанных строк
+
+    Args:
+        results_file_path: Путь к файлу результатов
+
+    Returns:
+        Set номеров строк, которые уже были обработаны (любой статус)
+    """
+    processed_rows = set()
+
+    if not os.path.exists(results_file_path):
+        print(f"[RESULTS] Файл результатов не найден (это нормально для первого запуска): {results_file_path}")
+        return processed_rows
+
+    try:
+        with open(results_file_path, 'r', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                if 'row_number' in row:
+                    processed_rows.add(int(row['row_number']))
+
+        print(f"[RESULTS] Загружено {len(processed_rows)} обработанных строк из результатов")
+    except Exception as e:
+        print(f"[RESULTS] [WARNING] Ошибка чтения результатов: {e}")
+
+    return processed_rows
+
+
+def write_row_status(results_file_path: str, row_number: int, status: str, start_time: str, end_time: str = "", error_msg: str = "", data_row: Dict = None, extracted_fields: Dict = None):
+    """
+    Записывает или обновляет статус обработки строки в файл результатов
+
+    Args:
+        results_file_path: Путь к файлу результатов
+        row_number: Номер строки в исходном CSV (1-based)
+        status: Статус - "processing", "success", "failed", "error"
+        start_time: Время начала обработки (ISO format)
+        end_time: Время завершения (пусто для "processing")
+        error_msg: Сообщение об ошибке (для failed/error)
+        data_row: Данные строки из CSV (для reference)
+        extracted_fields: Извлеченные поля из Network responses (словарь field_name: value)
+    """
+    import datetime
+
+    # Проверяем существует ли файл
+    file_exists = os.path.exists(results_file_path)
+
+    # Если файл существует, читаем его и ищем строку
+    existing_rows = {}
+    base_fieldnames = ['row_number', 'status', 'start_time', 'end_time', 'error_msg', 'data']
+
+    if file_exists:
+        try:
+            with open(results_file_path, 'r', encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                fieldnames = list(reader.fieldnames) if reader.fieldnames else base_fieldnames
+                for row in reader:
+                    if 'row_number' in row:
+                        existing_rows[int(row['row_number'])] = row
+        except Exception as e:
+            print(f"[RESULTS] [WARNING] Ошибка чтения результатов для обновления: {e}")
+            existing_rows = {}
+            fieldnames = base_fieldnames
+    else:
+        fieldnames = base_fieldnames
+
+    # Создаем или обновляем запись
+    row_data = {
+        'row_number': row_number,
+        'status': status,
+        'start_time': start_time,
+        'end_time': end_time,
+        'error_msg': error_msg,
+        'data': json.dumps(data_row, ensure_ascii=False) if data_row else ""
+    }
+
+    # 🌐 Добавляем извлеченные поля из Network responses
+    if extracted_fields:
+        for field_name, field_value in extracted_fields.items():
+            # Добавляем колонку если ее еще нет
+            if field_name not in fieldnames:
+                fieldnames.append(field_name)
+                print(f"[RESULTS] [NETWORK] Добавлена новая колонка: {field_name}", flush=True)
+
+            # Записываем значение
+            row_data[field_name] = str(field_value)
+            print(f"[RESULTS] [NETWORK] Строка {row_number}: {field_name} = {field_value}", flush=True)
+
+    existing_rows[row_number] = row_data
+
+    # Перезаписываем весь файл
+    try:
+        with open(results_file_path, 'w', encoding='utf-8', newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+
+            # Сортируем по номеру строки
+            for rn in sorted(existing_rows.keys()):
+                writer.writerow(existing_rows[rn])
+
+        # print(f"[RESULTS] Записан статус для строки {row_number}: {status}")
+    except Exception as e:
+        print(f"[RESULTS] [ERROR] Не удалось записать результат: {e}")
+
+
+def load_csv_data() -> tuple:
+    """
+    Загрузить данные из CSV файла через диалог и отфильтровать уже обработанные
+
+    Returns:
+        Tuple (csv_file_path, results_file_path, unprocessed_data)
+    """
     print("[CSV] Выберите CSV файл с данными...")
 
     root = Tk()
@@ -927,31 +1042,58 @@ def load_csv_data() -> List[Dict]:
 
     if not csv_file_path:
         print("[CSV] [ERROR] Файл не выбран")
-        return []
+        return ("", "", [])
 
     if not os.path.exists(csv_file_path):
         print(f"[CSV] [ERROR] Файл не существует: {csv_file_path}")
-        return []
+        return ("", "", [])
 
     print(f"[CSV] Загрузка файла: {csv_file_path}")
 
-    data = []
+    # Создаем путь к файлу результатов
+    csv_dir = os.path.dirname(csv_file_path)
+    csv_basename = os.path.splitext(os.path.basename(csv_file_path))[0]
+    results_file_path = os.path.join(csv_dir, f"{csv_basename}_results.csv")
+
+    print(f"[CSV] Файл результатов: {results_file_path}")
+
+    # Загружаем обработанные строки
+    processed_rows = load_processed_rows(results_file_path)
+
+    # Загружаем CSV данные
+    all_data = []
     try:
         with open(csv_file_path, 'r', encoding='utf-8') as f:
             reader = csv.DictReader(f)
-            data = list(reader)
+            all_data = list(reader)
 
-        print(f"[CSV] [OK] Загружено {len(data)} строк")
+        print(f"[CSV] [OK] Загружено {len(all_data)} строк из CSV")
 
-        if data and len(data) > 0:
-            headers = list(data[0].keys())
+        if all_data and len(all_data) > 0:
+            headers = list(all_data[0].keys())
             print(f"[CSV] Заголовки: {', '.join(headers)}")
 
     except Exception as e:
         print(f"[CSV] [ERROR] Ошибка загрузки: {e}")
-        return []
+        return ("", "", [])
 
-    return data
+    # Фильтруем уже обработанные строки
+    unprocessed_data = []
+    for row_idx, data_row in enumerate(all_data, 1):
+        # Добавляем номер строки в данные
+        data_row['__row_number__'] = row_idx
+
+        # Пропускаем уже обработанные
+        if row_idx in processed_rows:
+            continue
+
+        unprocessed_data.append(data_row)
+
+    skipped_count = len(all_data) - len(unprocessed_data)
+    print(f"[CSV] Пропущено {skipped_count} обработанных строк")
+    print(f"[CSV] К обработке: {len(unprocessed_data)} новых строк")
+
+    return (csv_file_path, results_file_path, unprocessed_data)
 
 
 '''
@@ -1258,6 +1400,156 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
         pre_code_clean = self._clean_code_section(pre_questions_code)
         post_code_clean = self._clean_code_section(post_questions_code)
 
+        # 🌐 Парсинг и генерация network capture кода
+        network_capture_code = ""
+        network_return_code = ""
+
+        if network_capture_patterns and len(network_capture_patterns) > 0:
+            # Парсим паттерны формата "pattern:field1,field2" или просто "pattern"
+            parsed_patterns = []
+            current_pattern = None
+            current_fields = []
+
+            try:
+                for item in network_capture_patterns:
+                    # Пропускаем не-строковые элементы (на случай ошибки конфигурации)
+                    if not isinstance(item, str):
+                        print(f"[WARNING] network_capture_patterns содержит не-строковый элемент: {type(item)} = {item}")
+                        continue
+
+                    if ':' in item:
+                        # Новый паттерн с полями: "validate:bind_profile.drivers.0.model"
+                        if current_pattern:
+                            # Сохраняем предыдущий паттерн
+                            parsed_patterns.append({'pattern': current_pattern, 'fields': current_fields})
+
+                        pattern, field = item.split(':', 1)
+                        current_pattern = pattern.strip()
+                        current_fields = [field.strip()]
+                    elif current_pattern:
+                        # Продолжение полей для текущего паттерна
+                        current_fields.append(item.strip())
+                    else:
+                        # Паттерн без полей
+                        parsed_patterns.append({'pattern': item.strip(), 'fields': []})
+
+                # Не забываем последний паттерн
+                if current_pattern:
+                    parsed_patterns.append({'pattern': current_pattern, 'fields': current_fields})
+
+            except Exception as e:
+                print(f"[ERROR] Ошибка парсинга network_capture_patterns: {e}")
+                print(f"[ERROR] network_capture_patterns = {network_capture_patterns}")
+                parsed_patterns = []
+
+            patterns_str = json.dumps(parsed_patterns, ensure_ascii=False)
+
+            network_capture_code = f'''
+        # ============================================================
+        # 🌐 ЗАХВАТ NETWORK RESPONSES (Developer Tools) + ИЗВЛЕЧЕНИЕ ПОЛЕЙ
+        # ============================================================
+        captured_data = {{}}
+        extracted_fields = {{}}  # Словарь для извлеченных полей: {{field_name: value}}
+        capture_patterns_config = {patterns_str}
+
+        def get_nested_value(data, field_path):
+            """
+            Извлекает значение по пути field.subfield.subsubfield
+            Поддерживает массивы: field.array.0.subfield
+            """
+            keys = field_path.split('.')
+            value = data
+            for key in keys:
+                # Проверяем, является ли ключ числовым индексом для массива
+                if isinstance(value, list):
+                    try:
+                        index = int(key)
+                        if 0 <= index < len(value):
+                            value = value[index]
+                        else:
+                            return None
+                    except ValueError:
+                        return None
+                elif isinstance(value, dict) and key in value:
+                    value = value[key]
+                else:
+                    return None
+            return value
+
+        def handle_response(response):
+            """Обработчик network responses - перехватывает данные и извлекает указанные поля"""
+            try:
+                url = response.url
+                # Проверяем каждый паттерн из конфига
+                for pattern_config in capture_patterns_config:
+                    pattern = pattern_config.get('pattern', '')
+                    fields = pattern_config.get('fields', [])
+
+                    if pattern.lower() in url.lower():
+                        print(f"[NETWORK_CAPTURE] Перехвачен ответ: {{url}}", flush=True)
+                        try:
+                            # Получаем JSON данные из ответа
+                            json_data = response.json()
+
+                            # Сохраняем полные данные для отладки
+                            if pattern not in captured_data:
+                                captured_data[pattern] = []
+                            captured_data[pattern].append({{
+                                'url': url,
+                                'status': response.status,
+                                'data': json_data
+                            }})
+
+                            # 🔥 ИЗВЛЕЧЕНИЕ КОНКРЕТНЫХ ПОЛЕЙ
+                            if fields:
+                                print(f"[NETWORK_CAPTURE] Извлекаю поля: {{fields}}", flush=True)
+                                for field in fields:
+                                    field_value = get_nested_value(json_data, field)
+                                    if field_value is not None:
+                                        extracted_fields[field] = field_value
+                                        print(f"[NETWORK_CAPTURE]   {{field}} = {{field_value}}", flush=True)
+                                    else:
+                                        print(f"[NETWORK_CAPTURE]   {{field}} не найдено в response", flush=True)
+                            else:
+                                # Если полей нет - сохраняем весь response
+                                print(f"[NETWORK_CAPTURE] Полный response сохранен для '{{pattern}}'", flush=True)
+                                print(f"[NETWORK_CAPTURE] Preview: {{str(json_data)[:200]}}...", flush=True)
+                        except Exception as e:
+                            print(f"[NETWORK_CAPTURE] Не удалось распарсить JSON: {{e}}", flush=True)
+                        break
+            except Exception as e:
+                # Игнорируем ошибки при обработке - не должны ломать основной флоу
+                pass
+
+        # Регистрируем обработчик для всех network responses
+        page.on("response", handle_response)
+        print("[NETWORK_CAPTURE] Обработчик зарегистрирован", flush=True)
+        print(f"[NETWORK_CAPTURE] Паттерны и поля: {{capture_patterns_config}}", flush=True)
+'''
+
+            network_return_code = '''
+        # 🌐 Вывод захваченных данных (если есть)
+        if captured_data:
+            print(f"\\n[NETWORK_CAPTURE] === ИТОГОВЫЕ ДАННЫЕ ===")
+            for pattern, entries in captured_data.items():
+                print(f"[NETWORK_CAPTURE] Паттерн '{{pattern}}': {{len(entries)}} ответов")
+                for i, entry in enumerate(entries, 1):
+                    print(f"[NETWORK_CAPTURE]   {{i}}. URL: {{entry['url']}}")
+                    print(f"[NETWORK_CAPTURE]      Status: {{entry['status']}}")
+                    print(f"[NETWORK_CAPTURE]      Data keys: {{list(entry['data'].keys()) if isinstance(entry['data'], dict) else 'Not a dict'}}")
+
+        if extracted_fields:
+            print(f"[NETWORK_CAPTURE] Извлеченные поля: {{extracted_fields}}", flush=True)
+
+        print(f"[ITERATION {{iteration_number}}] [OK] Завершено успешно")
+        return (True, extracted_fields)
+'''
+        else:
+            network_return_code = '''
+        print(f"[ITERATION {{iteration_number}}] [OK] Завершено успешно")
+        return (True, {{}})
+'''
+
         return f'''# ============================================================
 # ОСНОВНАЯ ФУНКЦИЯ ИТЕРАЦИИ
 # ============================================================
@@ -1270,12 +1562,15 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
         page: Playwright page
         data_row: Данные из CSV
         iteration_number: Номер итерации
+
+    Returns:
+        Tuple (success: bool, extracted_fields: dict)
     """
     print(f"\\n{'='*60}")
     print(f"[ITERATION {{iteration_number}}] Начало")
     print(f"{'='*60}")
 
-    try:
+    try:{network_capture_code}
         # ============================================================
         # НАЧАЛЬНЫЕ ДЕЙСТВИЯ (до вопросов)
         # ============================================================
@@ -1291,15 +1586,12 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
         # ДЕЙСТВИЯ ПОСЛЕ ВОПРОСОВ (popup окна, финальные действия)
         # ============================================================
 {self._indent_code(post_code_clean, 8)}
-
-        print(f"[ITERATION {{iteration_number}}] [OK] Завершено успешно")
-        return True
-
+{network_return_code}
     except Exception as e:
         print(f"[ITERATION {{iteration_number}}] [ERROR] Ошибка: {{e}}")
         import traceback
         traceback.print_exc()
-        return False
+        return (False, {{}})
 
 
 '''
@@ -1378,6 +1670,7 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
         retry_attempts = 3  # Количество попыток для #retry
         retry_wait = 30  # Время ожидания между попытками (сек)
         retry_scroll_search = False  # Использовать ли scroll_search в retry
+        current_page_context = 'page'  # Отслеживание текущего контекста страницы (page, page1, page2, page3)
 
         while i < len(lines):
             line = lines[i]
@@ -1391,6 +1684,29 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
 
             # Определяем текущий indent
             current_indent = len(line) - len(line.lstrip())
+
+            # Отслеживание переключения контекста страницы
+            if '= page1_info.value' in stripped:
+                current_page_context = 'page1'
+                result_lines.append(line)
+                i += 1
+                continue
+            elif '= page2_info.value' in stripped:
+                current_page_context = 'page2'
+                # Добавляем дебаг маркер для page2
+                indent_str = ' ' * current_indent
+                result_lines.append(line)
+                result_lines.append(f"{indent_str}print('[PAGE2_DEBUG] ===== НАЧАЛО РАБОТЫ С PAGE2 =====', flush=True)")
+                i += 1
+                continue
+            elif '= page3_info.value' in stripped:
+                current_page_context = 'page3'
+                # Добавляем дебаг маркер для page3
+                indent_str = ' ' * current_indent
+                result_lines.append(line)
+                result_lines.append(f"{indent_str}print('[PAGE3_DEBUG] ===== НАЧАЛО РАБОТЫ С PAGE3 =====', flush=True)")
+                i += 1
+                continue
 
             # Отслеживаем вход в with блок
             if stripped.startswith('with '):
@@ -1413,14 +1729,18 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
                 pause_match = re.match(r'#\s*pause\s*(\d+)', special_cmd)
                 if pause_match:
                     seconds = pause_match.group(1)
-                    result_lines.append(f"{indent_str}print(f'[PAUSE] Waiting {seconds} seconds...', flush=True)")
+                    # Дебаг только для page2 и page3
+                    if current_page_context in ['page2', 'page3']:
+                        result_lines.append(f"{indent_str}print(f'[{current_page_context.upper()}_DEBUG] [PAUSE] Waiting {seconds} seconds...', flush=True)")
                     result_lines.append(f"{indent_str}time.sleep({seconds})")
                     i += 1
                     continue
 
                 # #scrolldown or #scroll
                 if special_cmd in ['#scrolldown', '#scroll']:
-                    result_lines.append(f"{indent_str}print(f'[SCROLL] Scrolling down...', flush=True)")
+                    # Дебаг только для page2 и page3
+                    if current_page_context in ['page2', 'page3']:
+                        result_lines.append(f"{indent_str}print(f'[{current_page_context.upper()}_DEBUG] [SCROLL] Scrolling down...', flush=True)")
                     result_lines.append(f"{indent_str}page.evaluate('window.scrollTo(0, document.body.scrollHeight)')")
                     result_lines.append(f"{indent_str}time.sleep(0.5)")
                     i += 1
@@ -1428,7 +1748,9 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
 
                 # #scrollup
                 if special_cmd == '#scrollup':
-                    result_lines.append(f"{indent_str}print(f'[SCROLL] Scrolling up...', flush=True)")
+                    # Дебаг только для page2 и page3
+                    if current_page_context in ['page2', 'page3']:
+                        result_lines.append(f"{indent_str}print(f'[{current_page_context.upper()}_DEBUG] [SCROLL] Scrolling up...', flush=True)")
                     result_lines.append(f"{indent_str}page.evaluate('window.scrollTo(0, 0)')")
                     result_lines.append(f"{indent_str}time.sleep(0.5)")
                     i += 1
@@ -1436,7 +1758,9 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
 
                 # #scrollmid
                 if special_cmd == '#scrollmid':
-                    result_lines.append(f"{indent_str}print(f'[SCROLL] Scrolling to middle...', flush=True)")
+                    # Дебаг только для page2 и page3
+                    if current_page_context in ['page2', 'page3']:
+                        result_lines.append(f"{indent_str}print(f'[{current_page_context.upper()}_DEBUG] [SCROLL] Scrolling to middle...', flush=True)")
                     result_lines.append(f"{indent_str}page.evaluate('window.scrollTo(0, document.body.scrollHeight / 2)')")
                     result_lines.append(f"{indent_str}time.sleep(0.5)")
                     i += 1
@@ -1545,22 +1869,30 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
                 # Действия внутри with блока критичны - нужен retry с прогрессивными задержками
                 if inside_with_block:
                     # RETRY ЛОГИКА для критичных действий (popup открытие, navigation)
-                    result_lines.append(f"{indent_str}# Retry logic for critical action")
+                    # Дебаг только для page2/page3
+                    if current_page_context in ['page2', 'page3']:
+                        result_lines.append(f"{indent_str}print(f'[{current_page_context.upper()}_DEBUG] Retry logic for critical action', flush=True)")
                     result_lines.append(f"{indent_str}max_retries = 5")
                     result_lines.append(f"{indent_str}for retry_attempt in range(max_retries):")
                     result_lines.append(f"{indent_str}    try:")
                     result_lines.append(f"{indent_str}        if retry_attempt > 0:")
                     result_lines.append(f"{indent_str}            wait_time = retry_attempt * 3  # 3s, 6s, 9s, 12s, 15s")
+                    # Всегда показываем retry (это важно)
                     result_lines.append(f"{indent_str}            print(f'[RETRY] Attempt {{retry_attempt+1}}/{{max_retries}} after {{wait_time}}s...', flush=True)")
                     result_lines.append(f"{indent_str}            time.sleep(wait_time)")
                     result_lines.append(f"{indent_str}        {stripped}")
-                    result_lines.append(f"{indent_str}        print(f'[ACTION] [OK] Success', flush=True)")
+                    # Дебаг успеха только для page2/page3
+                    if current_page_context in ['page2', 'page3']:
+                        result_lines.append(f"{indent_str}        print(f'[{current_page_context.upper()}_DEBUG] [ACTION] [OK] Success', flush=True)")
                     result_lines.append(f"{indent_str}        break")
                     result_lines.append(f"{indent_str}    except PlaywrightTimeout:")
                     result_lines.append(f"{indent_str}        if retry_attempt == max_retries - 1:")
-                    result_lines.append(f"{indent_str}            print(f'[ACTION] [ERROR] Failed after {{max_retries}} retries', flush=True)")
+                    # Всегда показываем ошибки (критично)
+                    result_lines.append(f"{indent_str}            print(f'[CRASH] [ERROR] Failed after {{max_retries}} retries - {stripped[:50]}', flush=True)")
                     result_lines.append(f"{indent_str}            raise")
-                    result_lines.append(f"{indent_str}        print(f'[RETRY] Timeout, retrying...', flush=True)")
+                    # Дебаг retry только для page2/page3
+                    if current_page_context in ['page2', 'page3']:
+                        result_lines.append(f"{indent_str}        print(f'[{current_page_context.upper()}_DEBUG] [RETRY] Timeout, retrying...', flush=True)")
                 else:
                     # Действия вне with блока - retry, optional, или простой try-except
                     if retry_next_action:
@@ -1626,22 +1958,76 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
                         retry_scroll_search = False  # Сбрасываем флаг scroll_search
                     elif optional_next_action:
                         # Более понятные сообщения для опциональных элементов
+                        # Всегда показываем optional (важно)
                         result_lines.append(f"{indent_str}print('[OPTIONAL] Trying optional element...', flush=True)")
                         result_lines.append(f"{indent_str}try:")
                         result_lines.append(f"{indent_str}    {stripped}")
                         result_lines.append(f"{indent_str}    print('[OPTIONAL] [OK] Element found and clicked', flush=True)")
-                        result_lines.append(f"{indent_str}except PlaywrightTimeout:")
-                        result_lines.append(f"{indent_str}    print('[OPTIONAL] [SKIP] Element not found (this is OK)', flush=True)")
+                        result_lines.append(f"{indent_str}except Exception as e:")
+                        result_lines.append(f"{indent_str}    print(f'[OPTIONAL] [SKIP] Element not found or error: {{type(e).__name__}} (this is OK)', flush=True)")
                         result_lines.append(f"{indent_str}    pass")
                         optional_next_action = False  # Сбрасываем флаг
                     else:
                         # Обычные действия вне with блока
-                        result_lines.append(f"{indent_str}try:")
-                        result_lines.append(f"{indent_str}    {stripped}")
-                        result_lines.append(f"{indent_str}except PlaywrightTimeout:")
-                        result_lines.append(f'{indent_str}    print("[ACTION] [WARNING] Timeout - элемент не найден", flush=True)')
-                        result_lines.append(f'{indent_str}    print("[ACTION] [INFO] Продолжаем выполнение...", flush=True)')
-                        result_lines.append(f"{indent_str}    pass")
+                        # Детектим кнопку "Let's go" для специального дебага
+                        is_lets_go_button = ("Let's go" in stripped or "Let\\'s go" in stripped) and '.click()' in stripped and current_page_context == 'page2'
+
+                        # Дебаг для page2/page3 или критичной кнопки Let's go
+                        if current_page_context in ['page2', 'page3'] or is_lets_go_button:
+                            if is_lets_go_button:
+                                result_lines.append(f"{indent_str}# ===== СПЕЦИАЛЬНЫЙ ДЕБАГ ДЛЯ КНОПКИ LET'S GO =====")
+                                result_lines.append(f"{indent_str}print('[LETS_GO_DEBUG] Попытка найти и кликнуть кнопку Let\\'s go...', flush=True)")
+                                result_lines.append(f"{indent_str}try:")
+                                result_lines.append(f"{indent_str}    # Проверяем видимость кнопки")
+                                result_lines.append(f"{indent_str}    button = page2.get_by_role('button', name=\"Let's go\")")
+                                result_lines.append(f"{indent_str}    print(f'[LETS_GO_DEBUG] Кнопка найдена, count={{button.count()}}', flush=True)")
+                                result_lines.append(f"{indent_str}    print(f'[LETS_GO_DEBUG] Проверяю видимость...', flush=True)")
+                                result_lines.append(f"{indent_str}    is_visible = button.is_visible(timeout=5000)")
+                                result_lines.append(f"{indent_str}    print(f'[LETS_GO_DEBUG] is_visible={{is_visible}}', flush=True)")
+                                result_lines.append(f"{indent_str}    print(f'[LETS_GO_DEBUG] Проверяю enabled...', flush=True)")
+                                result_lines.append(f"{indent_str}    is_enabled = button.is_enabled(timeout=5000)")
+                                result_lines.append(f"{indent_str}    print(f'[LETS_GO_DEBUG] is_enabled={{is_enabled}}', flush=True)")
+                                result_lines.append(f"{indent_str}    print(f'[LETS_GO_DEBUG] Попытка клика...', flush=True)")
+                                result_lines.append(f"{indent_str}    {stripped}")
+                                result_lines.append(f"{indent_str}    print('[LETS_GO_DEBUG] [SUCCESS] Клик выполнен успешно!', flush=True)")
+                                result_lines.append(f"{indent_str}except Exception as e:")
+                                result_lines.append(f"{indent_str}    print(f'[LETS_GO_DEBUG] [ERROR] Ошибка: {{type(e).__name__}}: {{e}}', flush=True)")
+                                result_lines.append(f"{indent_str}    # Пробуем альтернативные методы")
+                                result_lines.append(f"{indent_str}    print('[LETS_GO_DEBUG] Попытка force=True...', flush=True)")
+                                result_lines.append(f"{indent_str}    try:")
+                                result_lines.append(f"{indent_str}        page2.get_by_role('button', name=\"Let's go\").click(force=True, timeout=5000)")
+                                result_lines.append(f"{indent_str}        print('[LETS_GO_DEBUG] [SUCCESS] Force click сработал!', flush=True)")
+                                result_lines.append(f"{indent_str}    except Exception as e2:")
+                                result_lines.append(f"{indent_str}        print(f'[LETS_GO_DEBUG] [ERROR] Force click не сработал: {{e2}}', flush=True)")
+                                result_lines.append(f"{indent_str}        print('[LETS_GO_DEBUG] Попытка JavaScript click...', flush=True)")
+                                result_lines.append(f"{indent_str}        try:")
+                                result_lines.append(f"{indent_str}            page2.evaluate(\"document.querySelector('button[form=\\\\\"prefill_review_form\\\\\"]').click()\")")
+                                result_lines.append(f"{indent_str}            print('[LETS_GO_DEBUG] [SUCCESS] JavaScript click сработал!', flush=True)")
+                                result_lines.append(f"{indent_str}        except Exception as e3:")
+                                result_lines.append(f"{indent_str}            print(f'[CRASH] [ERROR] Все методы клика не сработали: {{e3}}', flush=True)")
+                                result_lines.append(f"{indent_str}            raise")
+                            else:
+                                # Обычный дебаг для page2/page3 (без вывода кода - чтобы избежать проблем с кавычками)
+                                result_lines.append(f"{indent_str}print(f'[{current_page_context.upper()}_DEBUG] Выполнение действия...', flush=True)")
+                                result_lines.append(f"{indent_str}try:")
+                                result_lines.append(f"{indent_str}    {stripped}")
+                                result_lines.append(f"{indent_str}    print(f'[{current_page_context.upper()}_DEBUG] [OK] Действие выполнено', flush=True)")
+                                result_lines.append(f"{indent_str}except PlaywrightTimeout:")
+                                result_lines.append(f'{indent_str}    print(f"[{current_page_context.upper()}_DEBUG] [WARNING] Timeout - элемент не найден", flush=True)')
+                                result_lines.append(f'{indent_str}    print(f"[{current_page_context.upper()}_DEBUG] [INFO] Продолжаем выполнение...", flush=True)')
+                                result_lines.append(f"{indent_str}    pass")
+                        else:
+                            # Минимальный дебаг для page и page1
+                            result_lines.append(f"{indent_str}try:")
+                            result_lines.append(f"{indent_str}    {stripped}")
+                            result_lines.append(f"{indent_str}except PlaywrightTimeout:")
+                            # Только ошибки для page/page1
+                            result_lines.append(f'{indent_str}    print("[ACTION] [WARNING] Timeout - элемент не найден", flush=True)')
+                            result_lines.append(f"{indent_str}    pass")
+                            result_lines.append(f"{indent_str}except Exception as e:")
+                            # Всегда показываем критичные ошибки
+                            result_lines.append(f'{indent_str}    print(f"[CRASH] [ERROR] Критическая ошибка: {{type(e).__name__}}: {{e}}", flush=True)')
+                            result_lines.append(f"{indent_str}    raise")
             else:
                 # Не действие - оставляем как есть
                 result_lines.append(line)
@@ -1667,11 +2053,20 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
 
 def process_task(task_data: tuple) -> Dict:
     """Обработать одну задачу в отдельном потоке"""
-    thread_id, iteration_number, data_row, total_count = task_data
+    thread_id, iteration_number, data_row, total_count, results_file_path = task_data
+
+    # Получаем номер строки из данных
+    row_number = data_row.get('__row_number__', iteration_number)
 
     print(f"\\n{'#'*60}")
-    print(f"# THREAD {thread_id} | ROW {iteration_number}/{total_count}")
+    print(f"# THREAD {thread_id} | ROW {row_number}/{total_count}")
     print(f"{'#'*60}")
+
+    # Записываем начало обработки
+    import datetime
+    start_time = datetime.datetime.now().isoformat()
+    write_row_status(results_file_path, row_number, "processing", start_time, data_row=data_row)
+    print(f"[PROGRESS] Строка {row_number} отмечена как 'processing'")
 
     # Задержка для разнесения запусков Octobrowser (снижение нагрузки на систему)
     startup_delay = (thread_id - 1) * 3  # 0s, 3s, 6s, 9s, 12s...
@@ -1683,6 +2078,7 @@ def process_task(task_data: tuple) -> Dict:
     result = {
         'thread_id': thread_id,
         'iteration': iteration_number,
+        'row_number': row_number,
         'success': False,
         'error': None
     }
@@ -1696,6 +2092,9 @@ def process_task(task_data: tuple) -> Dict:
 
         if not profile_uuid:
             result['error'] = "Profile creation failed"
+            end_time = datetime.datetime.now().isoformat()
+            write_row_status(results_file_path, row_number, "failed", start_time, end_time, error_msg=result['error'], data_row=data_row)
+            print(f"[PROGRESS] Строка {row_number} отмечена как 'failed': {result['error']}")
             return result
 
         print(f"[THREAD {thread_id}] Ожидание синхронизации (5 сек)...")
@@ -1704,11 +2103,17 @@ def process_task(task_data: tuple) -> Dict:
         start_data = start_profile(profile_uuid)
         if not start_data:
             result['error'] = "Profile start failed"
+            end_time = datetime.datetime.now().isoformat()
+            write_row_status(results_file_path, row_number, "failed", start_time, end_time, error_msg=result['error'], data_row=data_row)
+            print(f"[PROGRESS] Строка {row_number} отмечена как 'failed': {result['error']}")
             return result
 
         debug_url = start_data.get('ws_endpoint')
         if not debug_url:
             result['error'] = "No CDP endpoint"
+            end_time = datetime.datetime.now().isoformat()
+            write_row_status(results_file_path, row_number, "failed", start_time, end_time, error_msg=result['error'], data_row=data_row)
+            print(f"[PROGRESS] Строка {row_number} отмечена как 'failed': {result['error']}")
             return result
 
         with sync_playwright() as playwright:
@@ -1719,9 +2124,10 @@ def process_task(task_data: tuple) -> Dict:
             page.set_default_timeout(DEFAULT_TIMEOUT)
             page.set_default_navigation_timeout(NAVIGATION_TIMEOUT)
 
-            iteration_result = run_iteration(page, data_row, iteration_number)
+            # run_iteration теперь возвращает tuple (success, extracted_fields)
+            iteration_success, extracted_fields = run_iteration(page, data_row, iteration_number)
 
-            if iteration_result:
+            if iteration_success:
                 result['success'] = True
             else:
                 result['error'] = "Iteration failed"
@@ -1731,11 +2137,25 @@ def process_task(task_data: tuple) -> Dict:
 
         stop_profile(profile_uuid)
 
+        # Записываем финальный статус с extracted_fields
+        end_time = datetime.datetime.now().isoformat()
+        if result['success']:
+            write_row_status(results_file_path, row_number, "success", start_time, end_time, data_row=data_row, extracted_fields=extracted_fields)
+            print(f"[PROGRESS] Строка {row_number} отмечена как 'success'")
+        else:
+            write_row_status(results_file_path, row_number, "failed", start_time, end_time, error_msg=result.get('error', 'Unknown error'), data_row=data_row)
+            print(f"[PROGRESS] Строка {row_number} отмечена как 'failed'")
+
     except Exception as e:
         print(f"[THREAD {thread_id}] [ERROR] Критическая ошибка: {e}")
         import traceback
         traceback.print_exc()
         result['error'] = str(e)
+
+        # Записываем ошибку
+        end_time = datetime.datetime.now().isoformat()
+        write_row_status(results_file_path, row_number, "error", start_time, end_time, error_msg=str(e), data_row=data_row)
+        print(f"[PROGRESS] Строка {row_number} отмечена как 'error': {e}")
 
     finally:
         if profile_uuid:
@@ -1761,17 +2181,26 @@ def main():
         print("[MAIN] [ERROR] Локальный Octobrowser недоступен!")
         return
 
-    csv_data = load_csv_data()
-    print(f"[MAIN] Загружено {len(csv_data)} строк данных")
+    # Загружаем CSV и получаем пути к файлам + отфильтрованные данные
+    csv_file_path, results_file_path, csv_data = load_csv_data()
 
-    if not csv_data:
-        print("[ERROR] Нет данных для обработки")
+    if not csv_file_path or not results_file_path:
+        print("[ERROR] Не удалось загрузить CSV файл")
         return
 
+    print(f"[MAIN] CSV файл: {csv_file_path}")
+    print(f"[MAIN] Файл результатов: {results_file_path}")
+    print(f"[MAIN] К обработке: {len(csv_data)} новых строк")
+
+    if not csv_data:
+        print("[MAIN] Нет новых данных для обработки (все строки уже обработаны)")
+        return
+
+    # Формируем задачи с учетом results_file_path
     tasks = []
     for iteration_number, data_row in enumerate(csv_data, 1):
         thread_id = (iteration_number - 1) % THREADS_COUNT + 1
-        task_data = (thread_id, iteration_number, data_row, len(csv_data))
+        task_data = (thread_id, iteration_number, data_row, len(csv_data), results_file_path)
         tasks.append(task_data)
 
     actual_threads = min(THREADS_COUNT, len(csv_data))
@@ -1789,10 +2218,10 @@ def main():
 
                 if result['success']:
                     success_count += 1
-                    print(f"[MAIN] [OK] Итерация {result['iteration']} завершена")
+                    print(f"[MAIN] [OK] Строка {result.get('row_number', result['iteration'])} завершена успешно")
                 else:
                     fail_count += 1
-                    print(f"[MAIN] [ERROR] Итерация {result['iteration']} завершена с ошибкой")
+                    print(f"[MAIN] [ERROR] Строка {result.get('row_number', result['iteration'])} завершена с ошибкой")
 
             except Exception as e:
                 fail_count += 1
