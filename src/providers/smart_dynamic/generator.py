@@ -1455,6 +1455,7 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
         extracted_fields = {{}}  # Словарь для извлеченных полей: {{field_name: value}}
         capture_patterns_config = {patterns_str}
         validate_counter = 0  # Счетчик validate запросов
+        total_responses_counter = 0  # Счетчик всех обработанных responses для диагностики
 
         # Создаем папку для сохранения network responses
         network_responses_dir = os.path.join(os.getcwd(), "network_responses")
@@ -1527,14 +1528,31 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
 
         def handle_response(response):
             """Обработчик network responses - ВСЕГДА сохраняет ВСЕ validate запросы без остановки"""
-            nonlocal validate_counter  # Доступ к счетчику из внешней области
+            nonlocal validate_counter, total_responses_counter  # Доступ к счетчикам из внешней области
 
             try:
                 url = response.url
+                total_responses_counter += 1  # Подсчитываем все responses
+
+                # ДИАГНОСТИКА: Логируем ВСЕ API запросы для отладки
+                if '/api/' in url or '/bind' in url or response.request.resource_type == 'xhr':
+                    print(f"[NETWORK_DEBUG] API Request: {{response.status}} {{url}}", flush=True)
 
                 # 🔥 ЖЕСТКАЯ ПРОВЕРКА: Если это запрос validate - ОБЯЗАТЕЛЬНО сохраняем в файл
                 # ВАЖНО: Записываем ВСЕ validate запросы, без остановки!
-                if 'validate' in url.lower():
+                # Проверяем:
+                # 1. Общая проверка: 'validate' в URL
+                # 2. ЖЕСТКИЙ URL: конкретный путь bind_api/web/validate
+                # 3. Домены: joinroot.com, joinroci.com, compare.com
+                is_validate = (
+                    'validate' in url.lower() or
+                    'bind_api/web/validate' in url or
+                    ('joinroot.com' in url and '/bind' in url) or
+                    ('joinroci.com' in url and '/bind' in url) or
+                    ('compare.com' in url and '/validate' in url)
+                )
+
+                if is_validate:
                     validate_counter += 1
                     print(f"[NETWORK_CAPTURE] [VALIDATE #{{validate_counter}}] Перехвачен validate запрос: {{url}}", flush=True)
                     try:
@@ -1615,6 +1633,7 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
         network_return_code = '''
         # 🌐 Вывод захваченных данных (если есть)
         print(f"\\n[NETWORK_CAPTURE] === ИТОГОВЫЕ ДАННЫЕ ===")
+        print(f"[NETWORK_CAPTURE] Обработано network responses: {{total_responses_counter}}", flush=True)
         print(f"[NETWORK_CAPTURE] Всего validate запросов записано: {{validate_counter}}", flush=True)
 
         if captured_data:
