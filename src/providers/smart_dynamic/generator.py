@@ -1490,10 +1490,10 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
                 with open(filepath, 'w', encoding='utf-8') as f:
                     json.dump(full_response, f, ensure_ascii=False, indent=2)
 
-                print(f"[NETWORK_CAPTURE] ✅ Response сохранен в файл: {{filename}}", flush=True)
+                print(f"[NETWORK_CAPTURE] [OK] Response сохранен в файл: {{filename}}", flush=True)
                 return filepath
             except Exception as e:
-                print(f"[NETWORK_CAPTURE] ❌ Ошибка сохранения в файл: {{e}}", flush=True)
+                print(f"[NETWORK_CAPTURE] [ERROR] Ошибка сохранения в файл: {{e}}", flush=True)
                 return None
 
         def get_nested_value(data, field_path):
@@ -1527,7 +1527,7 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
 
                 # 🔥 ЖЕСТКАЯ ПРОВЕРКА: Если это запрос validate - ОБЯЗАТЕЛЬНО сохраняем в файл
                 if 'validate' in url.lower():
-                    print(f"[NETWORK_CAPTURE] 🎯 Перехвачен validate запрос: {{url}}", flush=True)
+                    print(f"[NETWORK_CAPTURE] [VALIDATE] Перехвачен validate запрос: {{url}}", flush=True)
                     try:
                         json_data = response.json()
                         saved_file = save_network_response_to_file(
@@ -1538,9 +1538,9 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
                             iteration_num=iteration_number
                         )
                         if saved_file:
-                            print(f"[NETWORK_CAPTURE] ✅ Validate response сохранен: {{saved_file}}", flush=True)
+                            print(f"[NETWORK_CAPTURE] [OK] Validate response сохранен: {{saved_file}}", flush=True)
                     except Exception as e:
-                        print(f"[NETWORK_CAPTURE] ❌ Ошибка сохранения validate: {{e}}", flush=True)
+                        print(f"[NETWORK_CAPTURE] [ERROR] Ошибка сохранения validate: {{e}}", flush=True)
 
                 # Дополнительно проверяем паттерны (если они заданы)
                 if capture_patterns_config:
@@ -1591,7 +1591,7 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
         # 🔥 КРИТИЧНО: Регистрируем обработчик для ВСЕХ новых popup страниц
         def handle_new_page(new_page):
             """Автоматически подключает обработчик к новым popup окнам (page1, page2, page3)"""
-            print(f"[NETWORK_CAPTURE] 📄 Новая страница обнаружена, подключаю обработчик response", flush=True)
+            print(f"[NETWORK_CAPTURE] [NEW_PAGE] Новая страница обнаружена, подключаю обработчик response", flush=True)
             new_page.on("response", handle_response)
 
         page.context.on("page", handle_new_page)
