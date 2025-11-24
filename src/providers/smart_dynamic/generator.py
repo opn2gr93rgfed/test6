@@ -2047,7 +2047,8 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
                     scroll_next_action = False  # Сбрасываем флаг
 
                 # Действия внутри with блока критичны - нужен retry с прогрессивными задержками
-                if inside_with_block:
+                # НО: если мы внутри try_popup блока - retry НЕ нужен (уже есть внешний try/except)
+                if inside_with_block and not inside_try_popup_block:
                     # RETRY ЛОГИКА для критичных действий (popup открытие, navigation)
                     # Дебаг только для page2/page3
                     if current_page_context in ['page2', 'page3']:
@@ -2073,6 +2074,10 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
                     # Дебаг retry только для page2/page3
                     if current_page_context in ['page2', 'page3']:
                         result_lines.append(f"{indent_str}        print(f'[{current_page_context.upper()}_DEBUG] [RETRY] Timeout, retrying...', flush=True)")
+                elif inside_try_popup_block:
+                    # Действие внутри try_popup блока - просто добавляем как есть (уже есть внешний try/except)
+                    # Нужен дополнительный отступ для содержимого внутри with блока
+                    result_lines.append(f"{indent_str}    {stripped}")
                 else:
                     # Действия вне with блока - retry, optional, или простой try-except
                     if retry_next_action:
