@@ -25,17 +25,37 @@ FLORIDA_ZIPS = [
 FLORIDA_AREA_CODES = ['239', '305', '321', '352', '386', '407', '561', '727', '754', '772', '786', '813', '850', '863', '904', '941', '954']
 
 def generate_email(first_name, last_name):
+    """
+    Генерирует email с требованиями:
+    - Локальная часть (до @) длиной 8-14 символов
+    - Содержит ровно одну цифру
+    - Без точек
+    """
     domains = ['gmail.com', 'yahoo.com', 'outlook.com', 'hotmail.com', 'aol.com']
-    patterns = [
-        f"{first_name.lower()}.{last_name.lower()}",
-        f"{first_name.lower()}{last_name.lower()}",
-        f"{first_name.lower()}{random.randint(1, 999)}",
-        f"{first_name.lower()}.{last_name.lower()}{random.randint(1, 99)}",
-        f"{first_name[0].lower()}{last_name.lower()}",
-    ]
-    email_pattern = random.choice(patterns)
+
+    # Создаем базу без точек, только буквы
+    base = f"{first_name.lower()}{last_name.lower()}"
+
+    # Минимальная длина 7 (+ 1 цифра = 8)
+    # Максимальная длина 13 (+ 1 цифра = 14)
+    min_len = 7
+    max_len = 13
+
+    # Дополняем или обрезаем
+    if len(base) < min_len:
+        chars = 'abcdefghijklmnopqrstuvwxyz'
+        while len(base) < min_len:
+            base += random.choice(chars)
+    elif len(base) > max_len:
+        base = base[:max_len]
+
+    # Вставляем одну цифру в случайную позицию
+    digit = str(random.randint(0, 9))
+    insert_pos = random.randint(0, len(base))
+    email_local = base[:insert_pos] + digit + base[insert_pos:]
+
     domain = random.choice(domains)
-    return f"{email_pattern}@{domain}"
+    return f"{email_local}@{domain}"
 
 def generate_phone(area_code=None):
     if area_code is None:
