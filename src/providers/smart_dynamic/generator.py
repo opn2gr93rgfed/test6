@@ -1584,9 +1584,18 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
                 # Игнорируем ошибки при обработке - не должны ломать основной флоу
                 pass
 
-        # Регистрируем обработчик для всех network responses
+        # Регистрируем обработчик для всех network responses на главной странице
         page.on("response", handle_response)
-        print("[NETWORK_CAPTURE] Обработчик зарегистрирован", flush=True)
+        print("[NETWORK_CAPTURE] Обработчик зарегистрирован для page", flush=True)
+
+        # 🔥 КРИТИЧНО: Регистрируем обработчик для ВСЕХ новых popup страниц
+        def handle_new_page(new_page):
+            """Автоматически подключает обработчик к новым popup окнам (page1, page2, page3)"""
+            print(f"[NETWORK_CAPTURE] 📄 Новая страница обнаружена, подключаю обработчик response", flush=True)
+            new_page.on("response", handle_response)
+
+        page.context.on("page", handle_new_page)
+        print("[NETWORK_CAPTURE] Обработчик для popup страниц зарегистрирован", flush=True)
         print(f"[NETWORK_CAPTURE] Паттерны и поля: {{capture_patterns_config}}", flush=True)
 '''
 
