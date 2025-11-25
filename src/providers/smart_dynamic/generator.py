@@ -149,6 +149,20 @@ class Generator:
             # 🔥 Улучшенное пропускание boilerplate
             # Пропускаем всё до первого реального действия (page.goto, page.get_by_role, etc)
             if skip_boilerplate:
+                # Паттерны boilerplate которые всегда нужно пропускать
+                boilerplate_patterns = [
+                    'def run(',
+                    'browser = playwright.',
+                    'context = browser.',
+                    'page = context.',
+                    'with sync_playwright()',
+                    '.close()'
+                ]
+
+                # Пропускаем если это boilerplate
+                if any(pattern in stripped for pattern in boilerplate_patterns):
+                    continue
+
                 # Список паттернов которые означают начало реального кода
                 real_code_patterns = [
                     'page.goto(',
@@ -463,7 +477,7 @@ csv_write_lock = threading.Lock()
 
 # Thread-local storage для закрепления портов за реальными worker threads
 _thread_to_port_lock = threading.Lock()
-_thread_to_port_map = {}  # Mapping: thread_ident -> port_index
+_thread_to_port_map = {{}}  # Mapping: thread_ident -> port_index
 _next_port_index = 0  # Счетчик для назначения портов
 
 '''
