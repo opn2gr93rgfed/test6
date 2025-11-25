@@ -1134,6 +1134,19 @@ class ModernAppV3(ctk.CTk):
             if not csv_path or csv_path.strip() == '':
                 csv_path = 'data.csv'  # Default если пусто
 
+            # 🔥 ПОЛУЧИТЬ НАСТРОЙКИ 9PROXY
+            nine_proxy_config = self.config.get('nine_proxy', {})
+            nine_proxy_manager = self.proxy_tab_widget.get_9proxy_manager()
+
+            # Подготовить порты если 9Proxy включен
+            nine_proxy_ports = []
+            threads_count = int(self.threads_count_var.get()) if self.threads_count_var.get().isdigit() else 1
+
+            if nine_proxy_config.get('enabled') and nine_proxy_manager and nine_proxy_manager.proxy_pool:
+                print(f"[9PROXY] Настраиваю {threads_count} портов для многопоточной работы...")
+                nine_proxy_ports = nine_proxy_manager.setup_ports_for_threads(threads_count)
+                print(f"[9PROXY] Порты назначены: {nine_proxy_ports}")
+
             # 🔥 КРЕАТИВНОЕ РЕШЕНИЕ: CSV данные или путь
             config = {
                 'api_token': self.config.get('octobrowser', {}).get('api_token', ''),
@@ -1154,11 +1167,18 @@ class ModernAppV3(ctk.CTk):
                 # 🔥 ЗАДЕРЖКА МЕЖДУ ДЕЙСТВИЯМИ (КЛИКИ, ЗАПОЛНЕНИЯ)
                 'action_delay': float(self.action_delay_var.get()) if self.action_delay_var.get().replace('.', '', 1).isdigit() else 0.5,
                 # 🔥 МНОГОПОТОЧНОСТЬ
-                'threads_count': int(self.threads_count_var.get()) if self.threads_count_var.get().isdigit() else 1,
+                'threads_count': threads_count,
                 # 🎯 ЛИМИТ ИТЕРАЦИЙ (None = все строки CSV)
                 'max_iterations': int(self.max_iterations_var.get()) if self.max_iterations_var.get().strip() and self.max_iterations_var.get().isdigit() else None,
                 # 🌐 NETWORK CAPTURE - парсинг нового формата pattern:field1,field2
-                'network_capture_patterns': self._parse_network_patterns(self.network_patterns_var.get())
+                'network_capture_patterns': self._parse_network_patterns(self.network_patterns_var.get()),
+                # 🔥 НОВЫЕ ПОЛЯ ДЛЯ 9PROXY
+                'nine_proxy': nine_proxy_config,
+                'nine_proxy_enabled': nine_proxy_config.get('enabled', False) and nine_proxy_manager is not None and len(nine_proxy_manager.proxy_pool) > 0,
+                'nine_proxy_ports': nine_proxy_ports,  # [6001, 6002, ...]
+                'nine_proxy_api_url': nine_proxy_config.get('api_url', 'http://localhost:50000'),
+                'nine_proxy_strategy': nine_proxy_config.get('rotation', {}).get('strategy', 'sequential'),
+                'nine_proxy_auto_rotate': nine_proxy_config.get('rotation', {}).get('auto_rotate', True)
             }
 
             print(f"[DEBUG] API Token: {config['api_token'][:10]}..." if config['api_token'] else "[DEBUG] API Token: пуст")  # DEBUG

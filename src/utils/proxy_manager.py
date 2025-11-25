@@ -52,6 +52,10 @@ class NineProxyManager:
         self.failed_requests: int = 0
         self.last_fetch_time: Optional[datetime] = None
 
+        # 🔥 Многопоточная поддержка с отдельными портами
+        self.port_proxy_map: Dict[int, Dict] = {}  # Карта порт → прокси
+        self.base_port: int = 6000  # Начальный порт для переадресации
+
     def test_connection(self) -> tuple[bool, str]:
         """
         Проверить соединение с 9Proxy API
@@ -430,5 +434,116 @@ class NineProxyManager:
         self.current_index = 0
         self.current_proxy = None
 
+    def setup_ports_for_threads(self, num_threads: int) -> List[int]:
+        """
+        Подготовить порты для многопоточной работы
+
+        Args:
+            num_threads: Количество потоков
+
+        Returns:
+            Список портов [6001, 6002, ..., 6000+num_threads]
+        """
+        if not self.proxy_pool:
+            print("[9PROXY] Нет прокси в пуле для назначения портам")
+            return []
+
+        ports = []
+        for i in range(num_threads):
+            port = self.base_port + i + 1
+            ports.append(port)
+
+            # Назначить прокси на порт
+            proxy = self.proxy_pool[i % len(self.proxy_pool)]
+            success, message = self.assign_proxy_to_port(proxy, port)
+
+            if success:
+                print(f"[9PROXY] Порт {port} → {proxy.get('ip')} (ID: {proxy.get('id')})")
+            else:
+                print(f"[9PROXY] Ошибка назначения порта {port}: {message}")
+
+        return ports
+
+    def assign_proxy_to_port(self, proxy: Dict, port: int, plan: str = "2") -> tuple[bool, str]:
+        """
+        Назначить прокси на конкретный порт через /api/forward
+
+        Args:
+            proxy: Прокси из пула (должен содержать 'id')
+            port: Локальный порт для переадресации
+            plan: План (1=premium, 2=free, по умолчанию 2)
+
+        Returns:
+            (success, message)
+        """
+        proxy_id = proxy.get('id')
+        if not proxy_id:
+            return False, "Прокси не имеет ID"
+
+        success, message, data = self.forward_to_proxy(proxy_id, port, plan)
+
+        if success:
+            self.port_proxy_map[port] = proxy
+            print(f"[9PROXY] ✅ Порт {port} назначен: {proxy.get('ip')} ({proxy.get('country_code')})")
+
+        return success, message
+
+    def rotate_port(self, port: int, strategy: Literal["sequential", "random"] = "sequential", plan: str = "2") -> tuple[bool, str, Optional[Dict]]:
+        """
+        Обновить IP для конкретного порта
+
+        Args:
+            port: Порт, для которого нужно обновить IP
+            strategy: Стратегия выбора нового прокси
+            plan: План прокси
+
+        Returns:
+            (success, message, new_proxy)
+        """
+        # Получить следующий прокси
+        new_proxy = self.get_next_proxy(strategy)
+
+        if not new_proxy:
+            return False, "Нет доступных прокси", None
+
+        # Назначить на порт
+        success, message = self.assign_proxy_to_port(new_proxy, port, plan)
+
+        if success:
+            return True, f"Порт {port} обновлён: {new_proxy.get('ip')}", new_proxy
+        else:
+            return False, message, None
+
+    def get_proxy_for_port(self, port: int) -> Optional[str]:
+        """
+        Получить строку прокси для конкретного порта
+
+        Returns:
+            "socks5://127.0.0.1:{port}" или None
+        """
+        if port in self.port_proxy_map:
+            return f"socks5://127.0.0.1:{port}"
+        return None
+
+    def get_proxy_config_for_port(self, port: int) -> Optional[Dict]:
+        """
+        Получить конфигурацию прокси для Octobrowser для конкретного порта
+
+        Args:
+            port: Локальный порт
+
+        Returns:
+            Dict с конфигурацией прокси для Octobrowser или None
+        """
+        if port in self.port_proxy_map:
+            return {
+                'type': 'socks5',
+                'host': '127.0.0.1',
+                'port': str(port),
+                'login': '',
+                'password': ''
+            }
+        return None
+
     def __repr__(self):
-        return f"<NineProxyManager: {len(self.proxy_pool)} proxies, {self.api_base_url}>"
+        return f"<NineProxyManager: {len(self.proxy_pool)} proxies, {len(self.port_proxy_map)} ports, {self.api_base_url}>"
