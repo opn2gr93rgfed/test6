@@ -538,19 +538,19 @@ def rotate_proxy_for_port(port: int) -> bool:
         )
 
         if response.status_code != 200:
-            print(f"[9PROXY] ❌ Ошибка получения прокси: HTTP {response.status_code}")
+            print(f"[9PROXY] [ERROR] Ошибка получения прокси: HTTP {response.status_code}")
             return False
 
         data = response.json()
         if data.get('error') or not data.get('data'):
-            print(f"[9PROXY] ❌ Нет доступных прокси")
+            print(f"[9PROXY] [ERROR] Нет доступных прокси")
             return False
 
         proxy = data['data'][0]
         proxy_id = proxy.get('id')
 
         if not proxy_id:
-            print(f"[9PROXY] ❌ Прокси не имеет ID")
+            print(f"[9PROXY] [ERROR] Прокси не имеет ID")
             return False
 
         # Переадресовать на наш порт
@@ -563,17 +563,17 @@ def rotate_proxy_for_port(port: int) -> bool:
         if forward_response.status_code == 200:
             forward_data = forward_response.json()
             if not forward_data.get('error'):
-                print(f"[9PROXY] ✅ Порт {port} обновлён → {proxy.get('ip')} ({proxy.get('country_code')})")
+                print(f"[9PROXY] [OK] Порт {port} обновлён -> {proxy.get('ip')} ({proxy.get('country_code')})")
                 return True
             else:
-                print(f"[9PROXY] ❌ Forward ошибка: {forward_data.get('message')}")
+                print(f"[9PROXY] [ERROR] Forward ошибка: {forward_data.get('message')}")
                 return False
         else:
-            print(f"[9PROXY] ❌ Ошибка forward: HTTP {forward_response.status_code}")
+            print(f"[9PROXY] [ERROR] Ошибка forward: HTTP {forward_response.status_code}")
             return False
 
     except Exception as e:
-        print(f"[9PROXY] ❌ Ошибка ротации порта {port}: {e}")
+        print(f"[9PROXY] [ERROR] Ошибка ротации порта {port}: {e}")
         return False
 
 def get_nine_proxy_for_thread(thread_id: int) -> Optional[Dict]:
@@ -620,8 +620,8 @@ def initialize_nine_proxy_ports() -> bool:
     print(f"[9PROXY INIT] Проверка {len(NINE_PROXY_PORTS)} портов...")
     print(f"[9PROXY INIT] API URL: {NINE_PROXY_API_URL}")
     print(f"[9PROXY INIT] Порты: {NINE_PROXY_PORTS}")
-    print(f"[9PROXY INIT] ℹ️  Порты УЖЕ настроены и переадресуют на реальные IP")
-    print(f"[9PROXY INIT] ℹ️  Для смены IP используется /api/forward после каждой итерации")
+    print(f"[9PROXY INIT] [INFO] Порты УЖЕ настроены и переадресуют на реальные IP")
+    print(f"[9PROXY INIT] [INFO] Для смены IP используется /api/forward после каждой итерации")
 
     try:
         import requests
@@ -634,14 +634,14 @@ def initialize_nine_proxy_ports() -> bool:
         )
 
         if response.status_code == 200:
-            print(f"[9PROXY INIT] ✅ API доступен")
+            print(f"[9PROXY INIT] [OK] API доступен")
             return True
         else:
-            print(f"[9PROXY INIT] ⚠️ API недоступен: HTTP {response.status_code}")
+            print(f"[9PROXY INIT] [WARNING] API недоступен: HTTP {response.status_code}")
             return False
 
     except Exception as e:
-        print(f"[9PROXY INIT] ❌ Ошибка подключения к API: {e}")
+        print(f"[9PROXY INIT] [ERROR] Ошибка подключения к API: {e}")
         return False
 
 '''
