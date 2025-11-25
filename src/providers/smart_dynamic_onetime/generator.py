@@ -881,9 +881,11 @@ def get_proxy_for_thread(thread_id: int, iteration_number: int) -> Optional[Dict
             _proxy_counter += 1
         print(f"[PROXY] [ROUND-ROBIN] Thread {thread_id}, Iteration {iteration_number}: прокси #{index + 1}/{len(PROXY_LIST)}")
     elif PROXY_ROTATION_MODE == 'sticky':
-        index = thread_id % len(PROXY_LIST)
+        # 🔥 ИСПРАВЛЕНО: Используем iteration_number вместо thread_id
+        # thread_id повторяется для разных итераций, iteration_number уникален!
+        index = (iteration_number - 1) % len(PROXY_LIST)
         proxy_string = PROXY_LIST[index]
-        print(f"[PROXY] [STICKY] Thread {thread_id}: закреплен за прокси #{index + 1}")
+        print(f"[PROXY] [STICKY] Iteration {iteration_number}: прокси #{index + 1}/{len(PROXY_LIST)}")
     else:
         proxy_string = PROXY_LIST[0]
 
@@ -1036,11 +1038,52 @@ def delete_profile(profile_uuid: str):
     """Удалить профиль"""
     url = f"{{API_BASE_URL}}/profiles/{{profile_uuid}}"
     headers = {{"X-Octo-Api-Token": API_TOKEN}}
-    try:
-        requests.delete(url, headers=headers, timeout=10)
-        print(f"[PROFILE] [OK] Профиль удалён")
-    except:
-        pass
+
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            print(f"[PROFILE DELETE] Попытка {{attempt + 1}}/{{max_retries}}: DELETE {{url}}")
+            response = requests.delete(url, headers=headers, timeout=30)
+
+            print(f"[PROFILE DELETE] Response status: {{response.status_code}}")
+            print(f"[PROFILE DELETE] Response body: {{response.text[:500]}}")
+
+            if response.status_code in [200, 201, 204]:
+                print(f"[PROFILE] [OK] Профиль {{profile_uuid}} успешно удалён!")
+                return True
+            elif response.status_code == 404:
+                print(f"[PROFILE] [!] Профиль {{profile_uuid}} уже не существует (404)")
+                return True
+            elif response.status_code == 409:
+                # Конфликт - возможно профиль еще запущен
+                print(f"[PROFILE] [WARNING] Конфликт при удалении (409) - профиль может быть еще запущен")
+                if attempt < max_retries - 1:
+                    wait_time = (attempt + 1) * 2
+                    print(f"[PROFILE DELETE] Ожидание {{wait_time}}s перед повтором...")
+                    time.sleep(wait_time)
+                    continue
+            else:
+                print(f"[PROFILE] [ERROR] Не удалось удалить профиль: HTTP {{response.status_code}}")
+                print(f"[PROFILE] [ERROR] Body: {{response.text}}")
+                if attempt < max_retries - 1:
+                    time.sleep(2)
+                    continue
+
+        except requests.exceptions.Timeout:
+            print(f"[PROFILE] [ERROR] Timeout при удалении профиля")
+            if attempt < max_retries - 1:
+                time.sleep(2)
+                continue
+        except Exception as e:
+            print(f"[PROFILE] [ERROR] Exception при удалении: {{e}}")
+            import traceback
+            traceback.print_exc()
+            if attempt < max_retries - 1:
+                time.sleep(2)
+                continue
+
+    print(f"[PROFILE] [FAIL] Не удалось удалить профиль после {{max_retries}} попыток")
+    return False
 
 
 '''
@@ -2913,15 +2956,21 @@ def process_task(task_data: tuple) -> Dict:
             try:
                 print(f"[THREAD {thread_id}] [CLEANUP] Остановка профиля Octobrowser...")
                 stop_profile(profile_uuid)
-                time.sleep(1)
+                # 🔥 КРИТИЧНО: Ждём 5 секунд чтобы профиль полностью остановился!
+                # Иначе API вернёт 409 Conflict при попытке удаления
+                print(f"[THREAD {thread_id}] [CLEANUP] Ожидание полной остановки профиля (5 сек)...")
+                time.sleep(5)
             except Exception as e:
                 print(f"[THREAD {thread_id}] [CLEANUP] Ошибка остановки профиля: {e}")
 
             # 4. Удаляем профиль через API (одноразовый профиль!)
             try:
                 print(f"[THREAD {thread_id}] [CLEANUP] Удаление одноразового профиля...")
-                delete_profile(profile_uuid)
-                print(f"[THREAD {thread_id}] [CLEANUP] Профиль успешно удалён!")
+                delete_success = delete_profile(profile_uuid)
+                if delete_success:
+                    print(f"[THREAD {thread_id}] [CLEANUP] ✓ Профиль успешно удалён!")
+                else:
+                    print(f"[THREAD {thread_id}] [CLEANUP] ✗ Профиль НЕ удалён (см. ошибки выше)")
             except Exception as e:
                 print(f"[THREAD {thread_id}] [CLEANUP] Ошибка удаления профиля: {e}")
 
