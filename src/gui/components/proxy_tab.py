@@ -739,7 +739,13 @@ class ProxyTab(ctk.CTkFrame):
             # Показать первый прокси
             if proxies:
                 first_proxy = proxies[0]
-                proxy_str = f"{first_proxy.get('ip')}:{first_proxy.get('port', 8080)}"
+                # 🔥 Защита от строк вместо словарей
+                if isinstance(first_proxy, dict):
+                    proxy_str = f"{first_proxy.get('ip')}:{first_proxy.get('port', 8080)}"
+                elif isinstance(first_proxy, str):
+                    proxy_str = first_proxy  # Уже строка
+                else:
+                    proxy_str = str(first_proxy)
                 self.nine_proxy_current_label.configure(text=f"Current: {proxy_str}")
 
             if self.toast:
@@ -748,7 +754,11 @@ class ProxyTab(ctk.CTkFrame):
             # Логирование
             print(f"[9PROXY] {message}")
             for i, p in enumerate(proxies[:5], 1):  # Показать первые 5
-                print(f"[9PROXY]   {i}. {p.get('ip')}:{p.get('port', 8080)} ({p.get('country_code')}, {'Online' if p.get('is_online') else 'Offline'})")
+                # 🔥 Защита от строк
+                if isinstance(p, dict):
+                    print(f"[9PROXY]   {i}. {p.get('ip')}:{p.get('port', 8080)} ({p.get('country_code')}, {'Online' if p.get('is_online') else 'Offline'})")
+                else:
+                    print(f"[9PROXY]   {i}. {p}")
 
         else:
             if self.toast:

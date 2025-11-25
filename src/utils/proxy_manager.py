@@ -148,6 +148,11 @@ class NineProxyManager:
 
             data = response.json()
 
+            # 🔥 DEBUG: Посмотреть структуру ответа
+            print(f"[9PROXY DEBUG] API Response keys: {list(data.keys())}")
+            print(f"[9PROXY DEBUG] data.get('error'): {data.get('error')}")
+            print(f"[9PROXY DEBUG] data.get('data') type: {type(data.get('data'))}")
+
             # Проверить ошибки
             if data.get('error'):
                 return False, f"API Error: {data.get('message', 'Unknown error')}", []
@@ -155,8 +160,26 @@ class NineProxyManager:
             # Получить прокси
             proxies = data.get('data', [])
 
+            # 🔥 DEBUG: Проверяем тип данных
+            print(f"[9PROXY DEBUG] API вернул data: type={type(proxies)}, len={len(proxies) if isinstance(proxies, list) else 'N/A'}")
+            if proxies and len(proxies) > 0:
+                print(f"[9PROXY DEBUG] Первый элемент: type={type(proxies[0])}, value={proxies[0]}")
+
             if not proxies:
                 return False, "Прокси не найдены с указанными фильтрами", []
+
+            # 🔥 Защита: убедиться что proxies - это список словарей
+            if not isinstance(proxies, list):
+                return False, f"API вернул неправильный тип данных: {type(proxies)}", []
+
+            # Проверить первый элемент
+            if proxies and not isinstance(proxies[0], dict):
+                print(f"[9PROXY WARNING] API вернул не словари! Первый элемент: {type(proxies[0])}")
+                # Попробуем конвертировать если это строки
+                if isinstance(proxies[0], str):
+                    # Возможно это список строк вида "ip:port"
+                    print(f"[9PROXY] Попытка парсинга строк...")
+                    return False, "API вернул строки вместо объектов прокси", []
 
             # Обновить пул
             self.proxy_pool = proxies
