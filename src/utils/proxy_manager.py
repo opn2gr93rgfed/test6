@@ -184,8 +184,11 @@ class NineProxyManager:
 
                     for idx, proxy_str in enumerate(proxies):
                         try:
+                            print(f"[9PROXY DEBUG] Парсинг строки #{idx}: '{proxy_str}' (type={type(proxy_str)})")
+
                             # Парсим строку вида "ip:port" или "ip"
                             parts = proxy_str.strip().split(':')
+                            print(f"[9PROXY DEBUG]   Части после split: {parts}")
 
                             if len(parts) >= 2:
                                 ip = parts[0]
@@ -193,6 +196,8 @@ class NineProxyManager:
                             else:
                                 ip = parts[0]
                                 port = 8080  # Порт по умолчанию
+
+                            print(f"[9PROXY DEBUG]   Результат: ip='{ip}', port={port}")
 
                             # Создаем словарь прокси
                             proxy_dict = {

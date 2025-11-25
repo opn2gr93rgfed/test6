@@ -272,8 +272,22 @@ class Generator:
             if actions_count == 0:
                 print(f"[PARSER]      WARNING: НЕТ ДЕЙСТВИЙ! current_actions было: {len(current_actions) if current_actions else 0} строк")
 
+        # 🔥 Удалить остатки boilerplate из post_questions_lines
+        filtered_post_lines = []
+        for line in post_questions_lines:
+            stripped = line.strip()
+            # Пропускаем финальный boilerplate
+            if any(pattern in stripped for pattern in [
+                'with sync_playwright()',
+                'run(playwright)',
+                'playwright.sync_api',
+                '.close()'  # Финальные close() тоже не нужны
+            ]):
+                continue
+            filtered_post_lines.append(line)
+
         pre_questions_code = '\n'.join(pre_questions_lines)
-        post_questions_code = '\n'.join(post_questions_lines)
+        post_questions_code = '\n'.join(filtered_post_lines)
 
         return questions_pool, pre_questions_code, post_questions_code
 
