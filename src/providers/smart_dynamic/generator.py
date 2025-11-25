@@ -1209,9 +1209,9 @@ def find_question_in_pool(question_text: str, pool: Dict, debug: bool = False) -
 
         # Частичное совпадение - pool_key содержится в question_text или наоборот
         if normalized_key in normalized_question or normalized_question in normalized_key:
-            # Проверяем что это действительно похожие вопросы (>55% совпадение длины)
+            # Проверяем что это действительно похожие вопросы (>50% совпадение длины)
             len_ratio = min(len(normalized_key), len(normalized_question)) / max(len(normalized_key), len(normalized_question))
-            if len_ratio > 0.55:
+            if len_ratio > 0.50:
                 if debug:
                     print(f"[SEARCH] [OK] НАЙДЕНО (частичное, ratio={len_ratio:.2f}): '{pool_key}'")
                 return pool_key
@@ -1253,6 +1253,14 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
     print(f"\\n[DYNAMIC_QA] Начинаю поиск вопросов на странице...")
     print(f"[DYNAMIC_QA] В пуле доступно {len(QUESTIONS_POOL)} вопросов")
 
+    # КРИТИЧНО: Ждем полной загрузки страницы перед поиском вопросов
+    print(f"[DYNAMIC_QA] Ожидание загрузки страницы...")
+    try:
+        page.wait_for_load_state("networkidle", timeout=10000)
+    except:
+        print(f"[DYNAMIC_QA] [WARN] Таймаут networkidle, продолжаю...")
+    time.sleep(2)  # Дополнительная пауза для рендеринга
+
     # DEBUG: показываем ВСЕ вопросы ИЗ ПУЛА (чтобы видеть все что распарсилось)
     print(f"[DYNAMIC_QA] [DEBUG] Все вопросы в пуле:")
     for i, (key, value) in enumerate(list(QUESTIONS_POOL.items()), 1):
@@ -1274,8 +1282,16 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
         # Проверить каждый heading
         for idx, heading in enumerate(headings):
             try:
-                # Получить текст вопроса
+                # Получить текст вопроса с retry (элемент может быть не готов)
                 question_text = heading.inner_text().strip()
+
+                # RETRY: если текст пустой, подождать и попробовать еще раз
+                if not question_text or len(question_text) < 3:
+                    time.sleep(0.5)  # Короткая пауза
+                    try:
+                        question_text = heading.inner_text().strip()
+                    except:
+                        pass  # Если снова не получилось - пропускаем
 
                 # DEBUG: показываем все heading что находим
                 if answered_count == 0 and idx < 3:  # Только первые 3 и только на первом проходе
@@ -1366,9 +1382,9 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
 
                     print(f"[DYNAMIC_QA] [OK] Вопрос обработан ({answered_count}/{max_questions})")
 
-                    # Пауза для загрузки следующего вопроса (увеличена до 3 сек)
-                    print(f"[DYNAMIC_QA] Ожидание загрузки следующего вопроса (3 сек)...")
-                    time.sleep(3)
+                    # Пауза для загрузки следующего вопроса (увеличена до 4 сек для стабильности)
+                    print(f"[DYNAMIC_QA] Ожидание загрузки следующего вопроса (4 сек)...")
+                    time.sleep(4)
 
                     # Попробовать дождаться изменения DOM (новый вопрос)
                     try:
