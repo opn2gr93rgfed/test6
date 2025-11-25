@@ -606,75 +606,42 @@ def get_nine_proxy_for_thread(thread_id: int) -> Optional[Dict]:
 
 def initialize_nine_proxy_ports() -> bool:
     """
-    Инициализировать порты 9Proxy при запуске скрипта
+    Проверить доступность портов 9Proxy
 
-    Эта функция вызывается в main() перед началом работы.
-    Она получает прокси из 9Proxy API и назначает их на порты.
+    9Proxy API возвращает готовые локальные порты (127.0.0.1:6000-6009),
+    которые УЖЕ переадресуют на реальные IP. Не нужно вручную назначать прокси.
 
     Returns:
         True если успешно, False если ошибка
     """
     if not NINE_PROXY_ENABLED or not NINE_PROXY_PORTS:
-        return True  # Не ошибка, просто не используется
+        return True
 
-    print(f"[9PROXY INIT] Инициализация {len(NINE_PROXY_PORTS)} портов...")
+    print(f"[9PROXY INIT] Проверка {len(NINE_PROXY_PORTS)} портов...")
     print(f"[9PROXY INIT] API URL: {NINE_PROXY_API_URL}")
     print(f"[9PROXY INIT] Порты: {NINE_PROXY_PORTS}")
+    print(f"[9PROXY INIT] ℹ️  Порты УЖЕ настроены и переадресуют на реальные IP")
+    print(f"[9PROXY INIT] ℹ️  Для смены IP используется /api/forward после каждой итерации")
 
     try:
         import requests
 
-        # Получить список прокси
-        num_proxies = len(NINE_PROXY_PORTS)
+        # Просто проверим что API доступен
         response = requests.get(
             f"{NINE_PROXY_API_URL}/api/proxy",
-            params={'num': num_proxies, 't': 2},
-            timeout=10
+            params={'num': 1, 't': 2},
+            timeout=5
         )
 
-        if response.status_code != 200:
-            print(f"[9PROXY INIT] ❌ Ошибка получения прокси: HTTP {response.status_code}")
+        if response.status_code == 200:
+            print(f"[9PROXY INIT] ✅ API доступен")
+            return True
+        else:
+            print(f"[9PROXY INIT] ⚠️ API недоступен: HTTP {response.status_code}")
             return False
-
-        data = response.json()
-        if data.get('error') or not data.get('data'):
-            print(f"[9PROXY INIT] ❌ Нет доступных прокси")
-            return False
-
-        proxies = data['data']
-        print(f"[9PROXY INIT] ✅ Получено {len(proxies)} прокси")
-
-        # Назначить каждый прокси на порт через /api/forward
-        for i, port in enumerate(NINE_PROXY_PORTS):
-            if i >= len(proxies):
-                # Если прокси меньше чем портов - зациклить
-                proxy = proxies[i % len(proxies)]
-            else:
-                proxy = proxies[i]
-
-            proxy_id = proxy.get('id')
-            proxy_ip = proxy.get('ip')
-
-            forward_response = requests.get(
-                f"{NINE_PROXY_API_URL}/api/forward",
-                params={'id': proxy_id, 'port': port, 't': 2, 'plan': '2'},
-                timeout=10
-            )
-
-            if forward_response.status_code == 200:
-                forward_data = forward_response.json()
-                if not forward_data.get('error'):
-                    print(f"[9PROXY INIT] ✅ Порт {port} → {proxy_ip} ({proxy.get('country_code')})")
-                else:
-                    print(f"[9PROXY INIT] ⚠️ Порт {port}: {forward_data.get('message')}")
-            else:
-                print(f"[9PROXY INIT] ⚠️ Порт {port}: HTTP {forward_response.status_code}")
-
-        print(f"[9PROXY INIT] Инициализация завершена!")
-        return True
 
     except Exception as e:
-        print(f"[9PROXY INIT] ❌ Ошибка инициализации: {e}")
+        print(f"[9PROXY INIT] ❌ Ошибка подключения к API: {e}")
         return False
 
 '''

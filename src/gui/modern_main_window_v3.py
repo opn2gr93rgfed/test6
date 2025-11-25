@@ -1158,8 +1158,23 @@ class ModernAppV3(ctk.CTk):
                 print(f"[9PROXY] Стратегия: {nine_proxy_strategy}, Авто-ротация: {nine_proxy_auto_rotate}")
                 print(f"[9PROXY] Прокси в пуле: {len(nine_proxy_manager.proxy_pool)}")
 
-                nine_proxy_ports = nine_proxy_manager.setup_ports_for_threads(threads_count)
-                print(f"[9PROXY] Порты назначены: {nine_proxy_ports}")
+                # 🔥 9Proxy возвращает готовые порты - просто используем номера из пула
+                # Берём порты из proxy_pool (они уже в формате 127.0.0.1:6000)
+                nine_proxy_ports = []
+                for proxy in nine_proxy_manager.proxy_pool[:threads_count]:
+                    if isinstance(proxy, dict) and 'port' in proxy:
+                        nine_proxy_ports.append(proxy['port'])
+                    elif isinstance(proxy, str) and ':' in proxy:
+                        # Парсим "127.0.0.1:6000" → 6000
+                        port = int(proxy.split(':')[1])
+                        nine_proxy_ports.append(port)
+
+                # Если портов недостаточно - зациклим
+                if len(nine_proxy_ports) < threads_count:
+                    while len(nine_proxy_ports) < threads_count:
+                        nine_proxy_ports.append(nine_proxy_ports[len(nine_proxy_ports) % len(nine_proxy_manager.proxy_pool)])
+
+                print(f"[9PROXY] Порты для потоков: {nine_proxy_ports}")
             elif nine_proxy_enabled:
                 print(f"[9PROXY] ⚠️ Включен в настройках, но:")
                 if not nine_proxy_manager:
