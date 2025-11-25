@@ -1142,10 +1142,35 @@ class ModernAppV3(ctk.CTk):
             nine_proxy_ports = []
             threads_count = int(self.threads_count_var.get()) if self.threads_count_var.get().isdigit() else 1
 
-            if nine_proxy_config.get('enabled') and nine_proxy_manager and nine_proxy_manager.proxy_pool:
-                print(f"[9PROXY] Настраиваю {threads_count} портов для многопоточной работы...")
+            # Дебаг информация
+            print(f"[9PROXY DEBUG] nine_proxy_config: {nine_proxy_config}")
+            print(f"[9PROXY DEBUG] nine_proxy_manager: {nine_proxy_manager}")
+            print(f"[9PROXY DEBUG] manager.proxy_pool: {len(nine_proxy_manager.proxy_pool) if nine_proxy_manager and hasattr(nine_proxy_manager, 'proxy_pool') else 'N/A'}")
+
+            nine_proxy_enabled = nine_proxy_config.get('enabled', False)
+            nine_proxy_api_url = nine_proxy_config.get('api_url', 'http://localhost:50000')
+            nine_proxy_strategy = nine_proxy_config.get('rotation', {}).get('strategy', 'sequential')
+            nine_proxy_auto_rotate = nine_proxy_config.get('rotation', {}).get('auto_rotate', True)
+
+            if nine_proxy_enabled and nine_proxy_manager and hasattr(nine_proxy_manager, 'proxy_pool') and len(nine_proxy_manager.proxy_pool) > 0:
+                print(f"[9PROXY] ✅ Включен! Настраиваю {threads_count} портов...")
+                print(f"[9PROXY] API URL: {nine_proxy_api_url}")
+                print(f"[9PROXY] Стратегия: {nine_proxy_strategy}, Авто-ротация: {nine_proxy_auto_rotate}")
+                print(f"[9PROXY] Прокси в пуле: {len(nine_proxy_manager.proxy_pool)}")
+
                 nine_proxy_ports = nine_proxy_manager.setup_ports_for_threads(threads_count)
                 print(f"[9PROXY] Порты назначены: {nine_proxy_ports}")
+            elif nine_proxy_enabled:
+                print(f"[9PROXY] ⚠️ Включен в настройках, но:")
+                if not nine_proxy_manager:
+                    print(f"[9PROXY]    - Менеджер не инициализирован")
+                elif not hasattr(nine_proxy_manager, 'proxy_pool'):
+                    print(f"[9PROXY]    - У менеджера нет атрибута proxy_pool")
+                elif len(nine_proxy_manager.proxy_pool) == 0:
+                    print(f"[9PROXY]    - Пул прокси пустой. Нажмите 'Fetch Proxies' во вкладке Proxies")
+                nine_proxy_enabled = False  # Отключаем если условия не выполнены
+            else:
+                print(f"[9PROXY] ❌ Отключен в настройках")
 
             # 🔥 КРЕАТИВНОЕ РЕШЕНИЕ: CSV данные или путь
             config = {
@@ -1172,17 +1197,23 @@ class ModernAppV3(ctk.CTk):
                 'max_iterations': int(self.max_iterations_var.get()) if self.max_iterations_var.get().strip() and self.max_iterations_var.get().isdigit() else None,
                 # 🌐 NETWORK CAPTURE - парсинг нового формата pattern:field1,field2
                 'network_capture_patterns': self._parse_network_patterns(self.network_patterns_var.get()),
-                # 🔥 НОВЫЕ ПОЛЯ ДЛЯ 9PROXY
+                # 🔥🔥🔥 КРИТИЧНО: 9PROXY НАСТРОЙКИ 🔥🔥🔥
                 'nine_proxy': nine_proxy_config,
-                'nine_proxy_enabled': nine_proxy_config.get('enabled', False) and nine_proxy_manager is not None and len(nine_proxy_manager.proxy_pool) > 0,
+                'nine_proxy_enabled': nine_proxy_enabled,  # Используем вычисленное значение
                 'nine_proxy_ports': nine_proxy_ports,  # [6001, 6002, ...]
-                'nine_proxy_api_url': nine_proxy_config.get('api_url', 'http://localhost:50000'),
-                'nine_proxy_strategy': nine_proxy_config.get('rotation', {}).get('strategy', 'sequential'),
-                'nine_proxy_auto_rotate': nine_proxy_config.get('rotation', {}).get('auto_rotate', True)
+                'nine_proxy_api_url': nine_proxy_api_url,
+                'nine_proxy_strategy': nine_proxy_strategy,
+                'nine_proxy_auto_rotate': nine_proxy_auto_rotate
             }
 
-            print(f"[DEBUG] API Token: {config['api_token'][:10]}..." if config['api_token'] else "[DEBUG] API Token: пуст")  # DEBUG
-            print(f"[DEBUG] Profile config: tags={profile_config.get('tags')}, os={profile_config.get('fingerprint', {}).get('os')}")  # DEBUG
+            print(f"[DEBUG] API Token: {config['api_token'][:10]}..." if config['api_token'] else "[DEBUG] API Token: пуст")
+            print(f"[DEBUG] Profile config: tags={profile_config.get('tags')}, os={profile_config.get('fingerprint', {}).get('os')}")
+            print(f"[DEBUG] 9Proxy передаётся в генератор:")
+            print(f"[DEBUG]   - nine_proxy_enabled: {config['nine_proxy_enabled']}")
+            print(f"[DEBUG]   - nine_proxy_ports: {config['nine_proxy_ports']}")
+            print(f"[DEBUG]   - nine_proxy_api_url: {config['nine_proxy_api_url']}")
+            print(f"[DEBUG]   - nine_proxy_strategy: {config['nine_proxy_strategy']}")
+            print(f"[DEBUG]   - nine_proxy_auto_rotate: {config['nine_proxy_auto_rotate']}")
 
             # Проверка токена
             if not config['api_token']:

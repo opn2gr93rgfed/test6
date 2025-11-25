@@ -68,6 +68,14 @@ class Generator:
         nine_proxy_strategy = config.get('nine_proxy_strategy', 'sequential')
         nine_proxy_auto_rotate = config.get('nine_proxy_auto_rotate', True)
 
+        # Debug вывод
+        print(f"[GENERATOR DEBUG] 9Proxy настройки получены:")
+        print(f"[GENERATOR DEBUG]   - nine_proxy_enabled: {nine_proxy_enabled}")
+        print(f"[GENERATOR DEBUG]   - nine_proxy_ports: {nine_proxy_ports}")
+        print(f"[GENERATOR DEBUG]   - nine_proxy_api_url: {nine_proxy_api_url}")
+        print(f"[GENERATOR DEBUG]   - nine_proxy_strategy: {nine_proxy_strategy}")
+        print(f"[GENERATOR DEBUG]   - nine_proxy_auto_rotate: {nine_proxy_auto_rotate}")
+
         # Симуляция ввода текста
         self.simulate_typing = config.get('simulate_typing', True)
         self.typing_delay = config.get('typing_delay', 100)
