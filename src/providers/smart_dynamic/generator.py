@@ -117,20 +117,16 @@ class Generator:
                 in_post_section = True
                 in_questions_section = False
 
-                # ОТКЛЮЧЕНА АВТО-ДЕТЕКЦИЯ УСЛОВНОГО POPUP
-                # ПРИЧИНА: Слишком агрессивная - помечает ВСЕ popup после заполнения телефона
-                # Это ломает обычный page1, который не является условным
-                #
-                # РЕШЕНИЕ: Пользователь должен явно ставить #auto_conditional_popup
-                # перед нужным with блоком где действительно условный popup
-                # Это дает точный контроль и предотвращает ложные срабатывания
-                #
-                # ПРИМЕР ИСПОЛЬЗОВАНИЯ:
-                # page.fill("input[name='phone']", row["Phone"])
-                # #auto_conditional_popup  ← явный маркер для условного popup
-                # with page.expect_popup() as page2_info:
-                #     page.click("button")
-                # page2 = page2_info.value
+                # КРИТИЧНО: Проверяем предыдущую строку на наличие #auto_conditional_popup
+                # Если она была добавлена в current_actions - удаляем оттуда и добавляем в post
+                if current_question and current_actions:
+                    last_action = current_actions[-1].strip() if current_actions else ""
+                    if last_action.startswith('#auto_conditional_popup'):
+                        # Удаляем маркер из действий вопроса
+                        current_actions = current_actions[:-1]
+                        print(f"[PARSER] DEBUG: Перемещаю #auto_conditional_popup из вопроса '{current_question}' в post_questions_lines")
+                        # Добавляем маркер в post_questions (он будет обработан дальше)
+                        post_questions_lines.append(last_action)
 
                 # Проверяем следующую строку в with блоке на наличие .click()
                 # Если последнее действие текущего вопроса - клик по той же кнопке,
