@@ -43,9 +43,20 @@ class Generator:
             Полный исполняемый Python скрипт
         """
         api_token = config.get('api_token', '')
+
+        # 🔥 Защита от передачи строк вместо словарей
         proxy_config = config.get('proxy', {})
+        if not isinstance(proxy_config, dict):
+            proxy_config = {}
+
         proxy_list_config = config.get('proxy_list', {})
+        if not isinstance(proxy_list_config, dict):
+            proxy_list_config = {}
+
         profile_config = config.get('profile', {})
+        if not isinstance(profile_config, dict):
+            profile_config = {}
+
         threads_count = config.get('threads_count', 1)
         max_iterations = config.get('max_iterations', None)  # None = все строки CSV
         network_capture_patterns = config.get('network_capture_patterns', [])
@@ -113,11 +124,11 @@ class Generator:
             if not stripped or stripped.startswith('import ') or stripped.startswith('from '):
                 continue
 
-            # Пропускаем boilerplate
-            if any(pattern in stripped for pattern in [
+            # Пропускаем boilerplate (без учета отступов)
+            if any(pattern in line for pattern in [
                 'def run(', 'with sync_playwright()', 'run(playwright)',
-                'browser = playwright', 'context = browser', 'page = context',
-                '.close()'
+                'browser = playwright.chromium', 'context = browser.new_context()',
+                'page = context.new_page()', '.close()'
             ]):
                 continue
 
