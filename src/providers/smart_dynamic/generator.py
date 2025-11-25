@@ -1884,11 +1884,10 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
                             result_lines.append(f"{indent_str}                    button.click()")
                             result_lines.append(f"{indent_str}                else:")
                             result_lines.append(f'{indent_str}                    raise Exception("Кнопка не найдена")')
-                        result_lines.append(f"{indent_str}        ")
+                        result_lines.append(f"")
                         result_lines.append(f"{indent_str}        {popup_var} = {popup_info_var}.value")
                         result_lines.append(f"{indent_str}        print(f'[CONDITIONAL_POPUP] ✅ Popup успешно открыт с попытки {{attempt + 1}}', flush=True)")
                         result_lines.append(f"{indent_str}        break")
-                        result_lines.append(f"{indent_str}        ")
                         result_lines.append(f"{indent_str}    except Exception as e:")
                         result_lines.append(f"{indent_str}        if attempt == 0:")
                         result_lines.append(f"{indent_str}            print(f'[CONDITIONAL_POPUP] Popup не открылся, проверяю промежуточную страницу...', flush=True)")
@@ -1900,16 +1899,24 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
                         result_lines.append(f"{indent_str}        else:")
                         result_lines.append(f"{indent_str}            print(f'[CONDITIONAL_POPUP] ❌ КРИТИЧЕСКАЯ ОШИБКА: {{e}}', flush=True)")
                         result_lines.append(f'{indent_str}            raise Exception(f"Не удалось открыть popup после {{max_attempts}} попыток")')
-                        result_lines.append(f"{indent_str}")
+                        result_lines.append(f"")
                         result_lines.append(f"{indent_str}if not {popup_var}:")
                         result_lines.append(f'{indent_str}    raise Exception("FATAL: {popup_var} не был создан")')
 
-                        # Пропускаем следующую строку (клик по кнопке) и строку с page1 = page1_info.value
+                        # Пропускаем следующие строки with блока:
+                        # 1. Строка с кликом (уже обработана в нашем коде)
+                        # 2. Строка с присваиванием page1 = page1_info.value (уже обработана)
+                        # Ищем конец with блока (строку с присваиванием)
                         i = next_line_idx + 1  # Пропускаем клик
-                        # Ищем строку с page1 = page1_info.value и пропускаем её
-                        while i < len(lines):
+                        # Пропускаем до 5 следующих строк в поисках присваивания
+                        for skip_count in range(5):
+                            if i >= len(lines):
+                                break
                             if f'{popup_var} = {popup_info_var}.value' in lines[i]:
-                                i += 1
+                                i += 1  # Пропускаем эту строку тоже
+                                break
+                            # Если это не пустая строка и не присваивание - останавливаемся
+                            if lines[i].strip() and f'{popup_var} =' not in lines[i]:
                                 break
                             i += 1
 
