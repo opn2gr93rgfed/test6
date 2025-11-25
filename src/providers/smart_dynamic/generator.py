@@ -2257,12 +2257,22 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
                         # Более понятные сообщения для опциональных элементов
                         # Всегда показываем optional (важно)
                         result_lines.append(f"{indent_str}print('[OPTIONAL] Trying optional element...', flush=True)")
+
+                        # КРИТИЧНО: Устанавливаем короткий timeout для optional элементов
+                        result_lines.append(f"{indent_str}# Сохраняем текущий timeout и устанавливаем короткий (3 сек)")
+                        result_lines.append(f"{indent_str}original_timeout = {current_page_context}.default_timeout")
+                        result_lines.append(f"{indent_str}{current_page_context}.set_default_timeout(3000)")
+
                         result_lines.append(f"{indent_str}try:")
                         result_lines.append(f"{indent_str}    {stripped}")
-                        result_lines.append(f"{indent_str}    print('[OPTIONAL] [OK] Element found and clicked', flush=True)")
+                        result_lines.append(f"{indent_str}    print('[OPTIONAL] [OK] Element found and action completed', flush=True)")
                         result_lines.append(f"{indent_str}except Exception as e:")
                         result_lines.append(f"{indent_str}    print(f'[OPTIONAL] [SKIP] Element not found or error: {{type(e).__name__}} (this is OK)', flush=True)")
                         result_lines.append(f"{indent_str}    pass")
+                        result_lines.append(f"{indent_str}finally:")
+                        result_lines.append(f"{indent_str}    # Восстанавливаем исходный timeout")
+                        result_lines.append(f"{indent_str}    {current_page_context}.set_default_timeout(original_timeout)")
+
                         optional_next_action = False  # Сбрасываем флаг
                     else:
                         # Обычные действия вне with блока
