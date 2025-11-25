@@ -710,6 +710,16 @@ class ProxyTab(ctk.CTkFrame):
         today = self.nine_proxy_today_var.get()
         num = int(self.nine_proxy_count_var.get()) if self.nine_proxy_count_var.get().isdigit() else 10
 
+        # ВАЖНО: Показать какие фильтры используются
+        print(f"[9PROXY FETCH] Запрос прокси с фильтрами:")
+        print(f"[9PROXY FETCH]   country={country}")
+        print(f"[9PROXY FETCH]   state={state}")
+        print(f"[9PROXY FETCH]   city={city}")
+        print(f"[9PROXY FETCH]   isp={isp}")
+        print(f"[9PROXY FETCH]   plan={plan}")
+        print(f"[9PROXY FETCH]   today={today}")
+        print(f"[9PROXY FETCH]   num={num}")
+
         if self.toast:
             self.toast.info("📥 Загружаю прокси через 9Proxy API...")
 
@@ -818,7 +828,14 @@ class ProxyTab(ctk.CTkFrame):
         if self.toast:
             self.toast.success("💾 Настройки 9Proxy сохранены")
 
-        print(f"[9PROXY] Настройки сохранены: enabled={self.nine_proxy_enable_var.get()}, country={self.nine_proxy_country_var.get()}")
+        # Подробный вывод что сохранено
+        print(f"[9PROXY SAVE] Настройки сохранены:")
+        print(f"[9PROXY SAVE]   enabled={self.nine_proxy_enable_var.get()}")
+        print(f"[9PROXY SAVE]   country={self.nine_proxy_country_var.get()}")
+        print(f"[9PROXY SAVE]   state={self.nine_proxy_state_entry.get().strip()}")
+        print(f"[9PROXY SAVE]   city={self.nine_proxy_city_entry.get().strip()}")
+        print(f"[9PROXY SAVE]   isp={self.nine_proxy_isp_entry.get().strip()}")
+        print(f"[9PROXY SAVE]   plan={self.nine_proxy_plan_var.get()}")
 
     def load_9proxy_settings(self):
         """Загрузить настройки 9Proxy из config"""
