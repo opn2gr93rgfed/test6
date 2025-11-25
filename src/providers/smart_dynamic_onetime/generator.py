@@ -491,7 +491,7 @@ _next_port_index = 0  # Счетчик для назначения портов
 
         # Прокси конфигурация
         proxies_list = proxy_list_config.get('proxies', [])
-        rotation_mode = proxy_list_config.get('rotation_mode', 'random')
+        rotation_mode = proxy_list_config.get('rotation_mode', 'round-robin')  # 🔥 По умолчанию round-robin
         use_proxy_list = len(proxies_list) > 0
 
         if use_proxy_list:
