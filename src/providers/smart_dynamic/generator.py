@@ -116,6 +116,38 @@ class Generator:
                 in_post_section = True
                 in_questions_section = False
 
+                # ДЕТЕКЦИЯ УСЛОВНОГО POPUP ПОСЛЕ ЗАПОЛНЕНИЯ ТЕЛЕФОНА
+                # Проверяем, был ли телефон заполнен в последних 5 строках перед popup
+                is_conditional_popup = False
+                if 'with page.expect_popup()' in stripped:
+                    # Проверяем последние действия в pre_questions_lines и current_actions
+                    lines_to_check = []
+                    if current_actions:
+                        lines_to_check.extend(current_actions[-5:])  # Последние 5 действий текущего вопроса
+                    if pre_questions_lines:
+                        lines_to_check.extend([l.strip() for l in pre_questions_lines[-5:]])  # Последние 5 строк до вопросов
+
+                    # Ищем паттерн заполнения телефона
+                    phone_patterns = [
+                        r'\.fill\([^)]*(?:phone|Phone|PHONE|телефон|Телефон)',  # .fill() с телефоном в аргументе
+                        r'get_by_.*(?:phone|Phone|PHONE|телефон|Телефон).*\.fill\(',  # селектор с телефоном
+                        r'get_by_role\(["\']textbox["\'].*name=["\'][^"\']*(?:phone|Phone|number)[^"\']*["\']\).*\.fill\(',  # Phone number textbox
+                    ]
+
+                    for check_line in lines_to_check:
+                        for pattern in phone_patterns:
+                            if re.search(pattern, check_line, re.IGNORECASE):
+                                is_conditional_popup = True
+                                print(f"[PARSER] DEBUG: Обнаружен условный popup после заполнения телефона!")
+                                print(f"[PARSER] DEBUG: Триггерная строка: {check_line[:100]}")
+                                break
+                        if is_conditional_popup:
+                            break
+
+                # Если обнаружен условный popup, добавляем специальный маркер
+                if is_conditional_popup:
+                    post_questions_lines.append(' ' * (len(line) - len(line.lstrip())) + '#auto_conditional_popup')
+
                 # Проверяем следующую строку в with блоке на наличие .click()
                 # Если последнее действие текущего вопроса - клик по той же кнопке,
                 # то удаляем его из вопроса (он должен быть внутри with блока)
@@ -1760,6 +1792,7 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
         retry_attempts = 3  # Количество попыток для #retry
         retry_wait = 30  # Время ожидания между попытками (сек)
         retry_scroll_search = False  # Использовать ли scroll_search в retry
+        conditional_popup_next = False  # Флаг для #auto_conditional_popup
         current_page_context = 'page'  # Отслеживание текущего контекста страницы (page, page1, page2, page3)
 
         while i < len(lines):
@@ -1800,11 +1833,121 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
 
             # Отслеживаем вход в with блок
             if stripped.startswith('with '):
-                result_lines.append(line)
-                inside_with_block = True
-                with_block_indent = current_indent
-                i += 1
-                continue
+                # Проверяем, является ли это условным popup
+                if conditional_popup_next and 'page.expect_popup()' in stripped:
+                    # УНИВЕРСАЛЬНАЯ ОБРАБОТКА УСЛОВНОГО POPUP
+                    indent_str = ' ' * current_indent
+
+                    # Извлекаем переменную popup (page1_info, page2_info, etc.)
+                    popup_var_match = re.search(r'with\s+(\w+)\.expect_popup\(\)\s+as\s+(\w+):', stripped)
+                    if popup_var_match:
+                        page_var = popup_var_match.group(1)  # page
+                        popup_info_var = popup_var_match.group(2)  # page1_info
+
+                        # Извлекаем имя результирующей переменной (page1, page2, etc.) из следующих строк
+                        result_page_var = None
+                        button_name = None
+                        button_selector = None
+
+                        # Ищем следующие несколько строк для извлечения кнопки и результата
+                        for j in range(i + 1, min(i + 10, len(lines))):
+                            next_line = lines[j].strip()
+
+                            # Извлекаем кнопку из клика
+                            if '.click()' in next_line and button_name is None:
+                                # Пробуем get_by_role с name
+                                btn_match = re.search(r'get_by_role\(["\']button["\']\s*,\s*name=["\']([^"\']+)["\']\)', next_line)
+                                if btn_match:
+                                    button_name = btn_match.group(1)
+                                    button_selector = f'{page_var}.get_by_role("button", name="{button_name}")'
+
+                            # Извлекаем результирующую переменную (page1 = page1_info.value)
+                            if f'= {popup_info_var}.value' in next_line:
+                                result_match = re.search(r'(\w+)\s*=\s*' + re.escape(popup_info_var) + r'\.value', next_line)
+                                if result_match:
+                                    result_page_var = result_match.group(1)
+                                break
+
+                        if button_name and result_page_var:
+                            # Генерируем универсальный код для условного popup
+                            result_lines.append(f"{indent_str}# УНИВЕРСАЛЬНАЯ ОБРАБОТКА УСЛОВНОГО POPUP (после заполнения телефона)")
+                            result_lines.append(f"{indent_str}{result_page_var} = None")
+                            result_lines.append(f"{indent_str}max_popup_attempts = 2")
+                            result_lines.append(f"{indent_str}for popup_attempt in range(max_popup_attempts):")
+                            result_lines.append(f"{indent_str}    try:")
+                            result_lines.append(f"{indent_str}        print(f'[CONDITIONAL_POPUP] Попытка {{popup_attempt + 1}}/{{max_popup_attempts}} открыть popup...', flush=True)")
+                            result_lines.append(f"{indent_str}        with {page_var}.expect_popup(timeout=4000) as {popup_info_var}:")
+                            result_lines.append(f"{indent_str}            if popup_attempt == 0:")
+                            result_lines.append(f"{indent_str}                # Первая попытка - обычный клик")
+                            result_lines.append(f"{indent_str}                {button_selector}.click()")
+                            result_lines.append(f"{indent_str}            else:")
+                            result_lines.append(f"{indent_str}                # Вторая попытка - ищем кнопку на промежуточной странице")
+                            result_lines.append(f"{indent_str}                button = {button_selector}")
+                            result_lines.append(f"{indent_str}                if button.is_visible(timeout=2000):")
+                            result_lines.append(f"{indent_str}                    print('[CONDITIONAL_POPUP] Кнопка найдена на промежуточной странице', flush=True)")
+                            result_lines.append(f"{indent_str}                    button.click()")
+                            result_lines.append(f"{indent_str}                else:")
+                            result_lines.append(f"{indent_str}                    raise Exception('Кнопка не найдена')")
+                            result_lines.append(f"")
+                            result_lines.append(f"{indent_str}        {result_page_var} = {popup_info_var}.value")
+                            result_lines.append(f"{indent_str}        print(f'[CONDITIONAL_POPUP] Popup успешно открыт с попытки {{popup_attempt + 1}}', flush=True)")
+                            result_lines.append(f"{indent_str}        break")
+                            result_lines.append(f"")
+                            result_lines.append(f"{indent_str}    except Exception as e:")
+                            result_lines.append(f"{indent_str}        if popup_attempt == 0:")
+                            result_lines.append(f"{indent_str}            print(f'[CONDITIONAL_POPUP] Popup не открылся, проверяю промежуточную страницу...', flush=True)")
+                            result_lines.append(f"{indent_str}            try:")
+                            result_lines.append(f"{indent_str}                {page_var}.wait_for_load_state('networkidle', timeout=5000)")
+                            result_lines.append(f"{indent_str}            except:")
+                            result_lines.append(f"{indent_str}                pass")
+                            result_lines.append(f"{indent_str}            continue")
+                            result_lines.append(f"{indent_str}        else:")
+                            result_lines.append(f"{indent_str}            print(f'[CONDITIONAL_POPUP] КРИТИЧЕСКАЯ ОШИБКА: {{e}}', flush=True)")
+                            result_lines.append(f"{indent_str}            raise Exception(f'Не удалось открыть popup после {{max_popup_attempts}} попыток')")
+                            result_lines.append(f"")
+                            result_lines.append(f"{indent_str}if not {result_page_var}:")
+                            result_lines.append(f"{indent_str}    raise Exception('FATAL: {result_page_var} не был создан')")
+
+                            # Пропускаем следующие строки, которые уже обработаны (клик и присваивание)
+                            i += 1
+                            while i < len(lines):
+                                next_stripped = lines[i].strip()
+                                if f'= {popup_info_var}.value' in next_stripped:
+                                    i += 1  # Пропускаем строку присваивания
+                                    break
+                                elif '.click()' in next_stripped and button_name in next_stripped:
+                                    i += 1  # Пропускаем строку клика
+                                elif not next_stripped:
+                                    i += 1  # Пропускаем пустые строки
+                                else:
+                                    break
+
+                            conditional_popup_next = False  # Сбрасываем флаг
+                            continue
+                        else:
+                            # Не удалось извлечь кнопку или результат - используем стандартную обработку
+                            print("[GENERATOR] WARNING: Не удалось извлечь кнопку или результат для условного popup, используем стандартную обработку")
+                            result_lines.append(line)
+                            inside_with_block = True
+                            with_block_indent = current_indent
+                            conditional_popup_next = False
+                            i += 1
+                            continue
+                    else:
+                        # Не удалось распарсить with блок - используем стандартную обработку
+                        result_lines.append(line)
+                        inside_with_block = True
+                        with_block_indent = current_indent
+                        conditional_popup_next = False
+                        i += 1
+                        continue
+                else:
+                    # Обычный with блок
+                    result_lines.append(line)
+                    inside_with_block = True
+                    with_block_indent = current_indent
+                    i += 1
+                    continue
 
             # Отслеживаем выход из with блока
             if inside_with_block and current_indent <= with_block_indent and not stripped.startswith('with '):
@@ -1882,6 +2025,14 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
                     retry_wait = int(retry_match.group(2)) if retry_match.group(2) else 30
                     retry_scroll_search = retry_match.group(3) == 'scroll_search' if retry_match.group(3) else False
                     result_lines.append(f"{indent_str}# Retry enabled: {retry_attempts} attempts, {retry_wait}s wait{', with scroll_search' if retry_scroll_search else ''}")
+                    i += 1
+                    continue
+
+                # #auto_conditional_popup - следующий with page.expect_popup() должен обрабатываться универсально
+                # (для случаев, когда popup может открыться сразу или через промежуточную страницу)
+                if special_cmd == '#auto_conditional_popup':
+                    conditional_popup_next = True
+                    result_lines.append(f"{indent_str}# Conditional popup handling enabled for next with block")
                     i += 1
                     continue
 
