@@ -1777,6 +1777,32 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
         if not code or not code.strip():
             return code
 
+        # БЕЗОПАСНОСТЬ: Заменяем data_row["Field"] на data_row.get("Field", "") для избежания KeyError
+        # Паттерн: data_row["FieldX"] или data_row['FieldX']
+        # Исключаем присваивания (data_row["x"] = ...) - заменяем только чтение
+        # Негативный lookbehind не нужен, используем простой подход - не заменяем если справа идет "="
+        def safe_data_row_replacement(match):
+            # Проверяем контекст вокруг match
+            full_match = match.group(0)
+            quote = match.group(1)
+            field_name = match.group(2)
+
+            # Проверяем, что после match не идёт знак присваивания
+            # Получаем позицию в коде
+            start_pos = match.start()
+            end_pos = match.end()
+
+            # Проверяем следующие символы после match (пропуская пробелы)
+            remaining = code[end_pos:].lstrip()
+            if remaining.startswith('=') and not remaining.startswith('=='):
+                # Это присваивание, не заменяем
+                return full_match
+
+            # Это чтение, заменяем на .get()
+            return f'data_row.get({quote}{field_name}{quote}, "")'
+
+        code = re.sub(r'data_row\[(["\'])([^"\']+)\1\]', safe_data_row_replacement, code)
+
         # ВАЖНО: Заменяем .fill() на .press_sequentially() с симуляцией ввода
         if self.simulate_typing and '.fill(' in code:
             typing_delay_sec = self.typing_delay / 1000  # Конвертация мс в секунды
