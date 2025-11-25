@@ -2801,6 +2801,8 @@ def process_task(task_data: tuple) -> Dict:
         time.sleep(startup_delay)
 
     profile_uuid = None
+    browser = None
+    playwright_instance = None
     result = {
         'thread_id': thread_id,
         'iteration': iteration_number,
@@ -2836,26 +2838,23 @@ def process_task(task_data: tuple) -> Dict:
             print(f"[THREAD {thread_id}] [ERROR] {result['error']}")
             return result
 
-        with sync_playwright() as playwright:
-            browser = playwright.chromium.connect_over_cdp(debug_url)
-            context = browser.contexts[0]
-            page = context.pages[0]
+        playwright_instance = sync_playwright().start()
+        browser = playwright_instance.chromium.connect_over_cdp(debug_url)
+        context = browser.contexts[0]
+        page = context.pages[0]
 
-            page.set_default_timeout(DEFAULT_TIMEOUT)
-            page.set_default_navigation_timeout(NAVIGATION_TIMEOUT)
+        page.set_default_timeout(DEFAULT_TIMEOUT)
+        page.set_default_navigation_timeout(NAVIGATION_TIMEOUT)
 
-            # run_iteration теперь возвращает tuple (success, extracted_fields)
-            iteration_success, extracted_fields = run_iteration(page, data_row, iteration_number)
+        # run_iteration теперь возвращает tuple (success, extracted_fields)
+        iteration_success, extracted_fields = run_iteration(page, data_row, iteration_number)
 
-            if iteration_success:
-                result['success'] = True
-            else:
-                result['error'] = "Iteration failed"
+        if iteration_success:
+            result['success'] = True
+        else:
+            result['error'] = "Iteration failed"
 
-            time.sleep(2)
-            browser.close()
-
-        stop_profile(profile_uuid)
+        time.sleep(2)
 
         # 🔥 Ротация 9Proxy после завершения итерации
         if NINE_PROXY_ENABLED and NINE_PROXY_PORTS:
@@ -2888,11 +2887,45 @@ def process_task(task_data: tuple) -> Dict:
         result['error'] = str(e)
 
     finally:
+        # 🔥 ONE TIME PROFILE: Правильная очистка ВСЕГДА (даже при ошибках!)
+        print(f"[THREAD {thread_id}] [CLEANUP] Начинаю очистку ресурсов...")
+
+        # 1. Закрываем браузер Playwright (если был открыт)
+        if browser:
+            try:
+                print(f"[THREAD {thread_id}] [CLEANUP] Закрытие browser...")
+                browser.close()
+                print(f"[THREAD {thread_id}] [CLEANUP] Browser закрыт")
+            except Exception as e:
+                print(f"[THREAD {thread_id}] [CLEANUP] Ошибка закрытия browser: {e}")
+
+        # 2. Останавливаем Playwright instance
+        if playwright_instance:
+            try:
+                print(f"[THREAD {thread_id}] [CLEANUP] Остановка Playwright...")
+                playwright_instance.stop()
+                print(f"[THREAD {thread_id}] [CLEANUP] Playwright остановлен")
+            except Exception as e:
+                print(f"[THREAD {thread_id}] [CLEANUP] Ошибка остановки Playwright: {e}")
+
+        # 3. Останавливаем профиль Octobrowser (закрываем окно браузера)
         if profile_uuid:
-            time.sleep(1)
-            # 🔥 ONE TIME PROFILE: Удаляем профиль после завершения работы
-            print(f"[THREAD {thread_id}] [CLEANUP] Удаление одноразового профиля...")
-            delete_profile(profile_uuid)
+            try:
+                print(f"[THREAD {thread_id}] [CLEANUP] Остановка профиля Octobrowser...")
+                stop_profile(profile_uuid)
+                time.sleep(1)
+            except Exception as e:
+                print(f"[THREAD {thread_id}] [CLEANUP] Ошибка остановки профиля: {e}")
+
+            # 4. Удаляем профиль через API (одноразовый профиль!)
+            try:
+                print(f"[THREAD {thread_id}] [CLEANUP] Удаление одноразового профиля...")
+                delete_profile(profile_uuid)
+                print(f"[THREAD {thread_id}] [CLEANUP] Профиль успешно удалён!")
+            except Exception as e:
+                print(f"[THREAD {thread_id}] [CLEANUP] Ошибка удаления профиля: {e}")
+
+        print(f"[THREAD {thread_id}] [CLEANUP] Очистка завершена")
 
     return result
 
