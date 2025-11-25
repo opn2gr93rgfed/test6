@@ -7,6 +7,7 @@
 - Test proxy connection
 - Random rotation per thread
 - Support for HTTP, HTTPS, SOCKS5
+- 🔥 9Proxy API интеграция для динамической ротации
 """
 
 import customtkinter as ctk
@@ -15,6 +16,12 @@ from tkinter import filedialog
 from typing import List, Dict, Optional, Callable
 from pathlib import Path
 import re
+import threading
+
+# Импорт 9Proxy Manager
+import sys
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+from src.utils.proxy_manager import NineProxyManager
 
 
 class ProxyRow(ctk.CTkFrame):
@@ -137,10 +144,17 @@ class ProxyTab(ctk.CTkFrame):
         self.proxies = []
         self.proxy_widgets = []
 
+        # 🔥 9Proxy Manager
+        self.nine_proxy_manager = None
+        self.nine_proxy_enabled = False
+
         self.create_widgets()
 
         # Загрузить сохраненные прокси
         self.load_proxies()
+
+        # Загрузить настройки 9Proxy
+        self.load_9proxy_settings()
 
     def create_widgets(self):
         """Создать виджеты"""
@@ -239,6 +253,9 @@ class ProxyTab(ctk.CTkFrame):
         )
         self.placeholder.pack(expand=True, pady=100)
 
+        # === 9PROXY API INTEGRATION ===
+        self.create_9proxy_section()
+
         # === SETTINGS ===
         settings_frame = ctk.CTkFrame(
             self,
@@ -248,7 +265,7 @@ class ProxyTab(ctk.CTkFrame):
             border_color=self.theme['border_primary'],
             height=120
         )
-        settings_frame.grid(row=2, column=0, sticky="ew", padx=32, pady=(0, 32))
+        settings_frame.grid(row=3, column=0, sticky="ew", padx=32, pady=(0, 32))
         settings_frame.grid_propagate(False)
         settings_frame.grid_columnconfigure((0, 1, 2), weight=1)
 
@@ -309,6 +326,519 @@ class ProxyTab(ctk.CTkFrame):
         )
         self.timeout_entry.insert(0, "10")
         self.timeout_entry.grid(row=1, column=2, padx=24, pady=(0, 20), sticky="w")
+
+    def create_9proxy_section(self):
+        """Создать секцию настроек 9Proxy API"""
+        nine_proxy_frame = ctk.CTkFrame(
+            self,
+            corner_radius=16,
+            fg_color=self.theme['bg_secondary'],
+            border_width=2,
+            border_color=self.theme['accent_primary']
+        )
+        nine_proxy_frame.grid(row=2, column=0, sticky="ew", padx=32, pady=(0, 16))
+        nine_proxy_frame.grid_columnconfigure(0, weight=1)
+
+        # === HEADER ===
+        header_frame = ctk.CTkFrame(nine_proxy_frame, fg_color="transparent")
+        header_frame.grid(row=0, column=0, sticky="ew", padx=24, pady=(20, 10))
+        header_frame.grid_columnconfigure(1, weight=1)
+
+        title = ctk.CTkLabel(
+            header_frame,
+            text="🌐 9Proxy API Dynamic Rotation",
+            font=('Segoe UI', 18, 'bold'),
+            text_color=self.theme['accent_primary']
+        )
+        title.grid(row=0, column=0, sticky="w")
+
+        # Enable checkbox
+        self.nine_proxy_enable_var = tk.BooleanVar(value=False)
+        enable_switch = ctk.CTkSwitch(
+            header_frame,
+            text="Enable 9Proxy",
+            variable=self.nine_proxy_enable_var,
+            font=('Segoe UI', 12, 'bold'),
+            command=self.toggle_9proxy
+        )
+        enable_switch.grid(row=0, column=1, sticky="e")
+
+        # === MAIN SETTINGS ===
+        main_settings = ctk.CTkFrame(nine_proxy_frame, fg_color=self.theme['bg_tertiary'], corner_radius=12)
+        main_settings.grid(row=1, column=0, sticky="ew", padx=24, pady=(0, 10))
+        main_settings.grid_columnconfigure(1, weight=1)
+
+        # API Base URL
+        ctk.CTkLabel(
+            main_settings,
+            text="API Base URL:",
+            font=('Segoe UI', 11, 'bold'),
+            text_color=self.theme['text_primary']
+        ).grid(row=0, column=0, padx=15, pady=10, sticky="w")
+
+        self.nine_proxy_url_entry = ctk.CTkEntry(
+            main_settings,
+            width=300,
+            height=36,
+            font=('Consolas', 11),
+            placeholder_text="http://localhost:50000"
+        )
+        self.nine_proxy_url_entry.insert(0, "http://localhost:50000")
+        self.nine_proxy_url_entry.grid(row=0, column=1, padx=10, pady=10, sticky="ew")
+
+        # Test Connection Button
+        self.nine_proxy_test_btn = ctk.CTkButton(
+            main_settings,
+            text="🔍 Test Connection",
+            command=self.test_9proxy_connection,
+            height=36,
+            width=150,
+            fg_color=self.theme['accent_info'],
+            font=('Segoe UI', 11, 'bold')
+        )
+        self.nine_proxy_test_btn.grid(row=0, column=2, padx=15, pady=10, sticky="e")
+
+        # === FILTERS ===
+        filters_frame = ctk.CTkFrame(nine_proxy_frame, fg_color=self.theme['bg_tertiary'], corner_radius=12)
+        filters_frame.grid(row=2, column=0, sticky="ew", padx=24, pady=(0, 10))
+        filters_frame.grid_columnconfigure((1, 3, 5), weight=1)
+
+        # Country
+        ctk.CTkLabel(
+            filters_frame,
+            text="Country:",
+            font=('Segoe UI', 10),
+            text_color=self.theme['text_primary']
+        ).grid(row=0, column=0, padx=(15, 5), pady=8, sticky="w")
+
+        self.nine_proxy_country_var = tk.StringVar(value="US")
+        country_combo = ctk.CTkComboBox(
+            filters_frame,
+            values=["", "US", "VN", "RU", "DE", "FR", "GB", "CA", "AU", "JP", "KR", "CN"],
+            variable=self.nine_proxy_country_var,
+            width=100,
+            height=32,
+            font=('Segoe UI', 10)
+        )
+        country_combo.grid(row=0, column=1, padx=5, pady=8, sticky="ew")
+
+        # City
+        ctk.CTkLabel(
+            filters_frame,
+            text="City:",
+            font=('Segoe UI', 10),
+            text_color=self.theme['text_primary']
+        ).grid(row=0, column=2, padx=(10, 5), pady=8, sticky="w")
+
+        self.nine_proxy_city_entry = ctk.CTkEntry(
+            filters_frame,
+            width=120,
+            height=32,
+            font=('Segoe UI', 10),
+            placeholder_text="Optional"
+        )
+        self.nine_proxy_city_entry.grid(row=0, column=3, padx=5, pady=8, sticky="ew")
+
+        # ISP
+        ctk.CTkLabel(
+            filters_frame,
+            text="ISP:",
+            font=('Segoe UI', 10),
+            text_color=self.theme['text_primary']
+        ).grid(row=0, column=4, padx=(10, 5), pady=8, sticky="w")
+
+        self.nine_proxy_isp_entry = ctk.CTkEntry(
+            filters_frame,
+            width=120,
+            height=32,
+            font=('Segoe UI', 10),
+            placeholder_text="Optional"
+        )
+        self.nine_proxy_isp_entry.grid(row=0, column=5, padx=(5, 15), pady=8, sticky="ew")
+
+        # Plan Type & Number
+        ctk.CTkLabel(
+            filters_frame,
+            text="Plan:",
+            font=('Segoe UI', 10),
+            text_color=self.theme['text_primary']
+        ).grid(row=1, column=0, padx=(15, 5), pady=8, sticky="w")
+
+        self.nine_proxy_plan_var = tk.StringVar(value="all")
+        plan_combo = ctk.CTkComboBox(
+            filters_frame,
+            values=["all", "premium", "free"],
+            variable=self.nine_proxy_plan_var,
+            width=100,
+            height=32,
+            font=('Segoe UI', 10)
+        )
+        plan_combo.grid(row=1, column=1, padx=5, pady=8, sticky="ew")
+
+        # Number of proxies
+        ctk.CTkLabel(
+            filters_frame,
+            text="Count:",
+            font=('Segoe UI', 10),
+            text_color=self.theme['text_primary']
+        ).grid(row=1, column=2, padx=(10, 5), pady=8, sticky="w")
+
+        self.nine_proxy_count_var = tk.StringVar(value="10")
+        count_entry = ctk.CTkEntry(
+            filters_frame,
+            textvariable=self.nine_proxy_count_var,
+            width=80,
+            height=32,
+            font=('Segoe UI', 10)
+        )
+        count_entry.grid(row=1, column=3, padx=5, pady=8, sticky="w")
+
+        # Today's proxies checkbox
+        self.nine_proxy_today_var = tk.BooleanVar(value=False)
+        today_check = ctk.CTkCheckBox(
+            filters_frame,
+            text="Only Today's Proxies",
+            variable=self.nine_proxy_today_var,
+            font=('Segoe UI', 10)
+        )
+        today_check.grid(row=1, column=4, columnspan=2, padx=(10, 15), pady=8, sticky="w")
+
+        # === ROTATION SETTINGS ===
+        rotation_frame = ctk.CTkFrame(nine_proxy_frame, fg_color=self.theme['bg_tertiary'], corner_radius=12)
+        rotation_frame.grid(row=3, column=0, sticky="ew", padx=24, pady=(0, 10))
+        rotation_frame.grid_columnconfigure((1, 3, 5), weight=1)
+
+        # Auto-rotate checkbox
+        self.nine_proxy_auto_rotate_var = tk.BooleanVar(value=True)
+        auto_rotate_check = ctk.CTkCheckBox(
+            rotation_frame,
+            text="Auto-rotate on each iteration",
+            variable=self.nine_proxy_auto_rotate_var,
+            font=('Segoe UI', 11, 'bold')
+        )
+        auto_rotate_check.grid(row=0, column=0, padx=15, pady=10, sticky="w")
+
+        # Rotation strategy
+        ctk.CTkLabel(
+            rotation_frame,
+            text="Strategy:",
+            font=('Segoe UI', 10),
+            text_color=self.theme['text_primary']
+        ).grid(row=0, column=1, padx=(10, 5), pady=10, sticky="w")
+
+        self.nine_proxy_strategy_var = tk.StringVar(value="sequential")
+        strategy_combo = ctk.CTkComboBox(
+            rotation_frame,
+            values=["sequential", "random"],
+            variable=self.nine_proxy_strategy_var,
+            width=120,
+            height=32,
+            font=('Segoe UI', 10)
+        )
+        strategy_combo.grid(row=0, column=2, padx=5, pady=10, sticky="w")
+
+        # Skip offline proxies
+        self.nine_proxy_skip_offline_var = tk.BooleanVar(value=True)
+        skip_offline_check = ctk.CTkCheckBox(
+            rotation_frame,
+            text="Skip offline proxies",
+            variable=self.nine_proxy_skip_offline_var,
+            font=('Segoe UI', 10)
+        )
+        skip_offline_check.grid(row=0, column=3, padx=(10, 15), pady=10, sticky="w")
+
+        # === STATUS & CONTROLS ===
+        status_frame = ctk.CTkFrame(nine_proxy_frame, fg_color=self.theme['bg_primary'], corner_radius=12)
+        status_frame.grid(row=4, column=0, sticky="ew", padx=24, pady=(0, 20))
+        status_frame.grid_columnconfigure(1, weight=1)
+
+        # Status label
+        self.nine_proxy_status_label = ctk.CTkLabel(
+            status_frame,
+            text="⚪ Not connected",
+            font=('Consolas', 11),
+            text_color=self.theme['text_secondary'],
+            anchor="w"
+        )
+        self.nine_proxy_status_label.grid(row=0, column=0, padx=15, pady=10, sticky="w")
+
+        # Current proxy label
+        self.nine_proxy_current_label = ctk.CTkLabel(
+            status_frame,
+            text="Current: None",
+            font=('Consolas', 10),
+            text_color=self.theme['text_tertiary'],
+            anchor="w"
+        )
+        self.nine_proxy_current_label.grid(row=0, column=1, padx=10, pady=10, sticky="w")
+
+        # Proxies count label
+        self.nine_proxy_count_label = ctk.CTkLabel(
+            status_frame,
+            text="Pool: 0 proxies",
+            font=('Consolas', 10, 'bold'),
+            text_color=self.theme['accent_primary'],
+            anchor="e"
+        )
+        self.nine_proxy_count_label.grid(row=0, column=2, padx=10, pady=10, sticky="e")
+
+        # Action buttons
+        btn_frame = ctk.CTkFrame(status_frame, fg_color="transparent")
+        btn_frame.grid(row=0, column=3, padx=15, pady=10, sticky="e")
+
+        ctk.CTkButton(
+            btn_frame,
+            text="📥 Fetch Proxies",
+            command=self.fetch_9proxy_list,
+            height=36,
+            width=130,
+            fg_color=self.theme['accent_success'],
+            font=('Segoe UI', 10, 'bold')
+        ).pack(side="left", padx=4)
+
+        ctk.CTkButton(
+            btn_frame,
+            text="🔄 Rotate Now",
+            command=self.rotate_9proxy_now,
+            height=36,
+            width=110,
+            fg_color=self.theme['accent_warning'],
+            font=('Segoe UI', 10, 'bold')
+        ).pack(side="left", padx=4)
+
+        ctk.CTkButton(
+            btn_frame,
+            text="💾 Save Settings",
+            command=self.save_9proxy_settings,
+            height=36,
+            width=130,
+            fg_color=self.theme['accent_primary'],
+            font=('Segoe UI', 10, 'bold')
+        ).pack(side="left", padx=4)
+
+    def toggle_9proxy(self):
+        """Включить/выключить 9Proxy интеграцию"""
+        self.nine_proxy_enabled = self.nine_proxy_enable_var.get()
+
+        if self.nine_proxy_enabled:
+            # Инициализировать менеджер
+            api_url = self.nine_proxy_url_entry.get().strip()
+            if not api_url:
+                api_url = "http://localhost:50000"
+
+            self.nine_proxy_manager = NineProxyManager(api_url)
+            self.nine_proxy_manager.enabled = True
+
+            if self.toast:
+                self.toast.success("✅ 9Proxy включен")
+        else:
+            self.nine_proxy_manager = None
+            if self.toast:
+                self.toast.info("⚪ 9Proxy выключен")
+
+    def test_9proxy_connection(self):
+        """Тестировать подключение к 9Proxy API"""
+        api_url = self.nine_proxy_url_entry.get().strip()
+        if not api_url:
+            if self.toast:
+                self.toast.warning("Введите API URL")
+            return
+
+        # Создать временный менеджер для теста
+        temp_manager = NineProxyManager(api_url)
+
+        if self.toast:
+            self.toast.info("🔍 Тестирую подключение...")
+
+        def test_thread():
+            success, message = temp_manager.test_connection()
+
+            # Обновить статус в главном потоке
+            self.after(0, lambda: self.update_9proxy_status(success, message))
+
+            if success and self.toast:
+                self.after(0, lambda: self.toast.success(message))
+            elif self.toast:
+                self.after(0, lambda: self.toast.error(message))
+
+        thread = threading.Thread(target=test_thread, daemon=True)
+        thread.start()
+
+    def update_9proxy_status(self, success: bool, message: str):
+        """Обновить статус подключения"""
+        if success:
+            self.nine_proxy_status_label.configure(
+                text=f"✅ {message}",
+                text_color=self.theme['log_success']
+            )
+        else:
+            self.nine_proxy_status_label.configure(
+                text=f"❌ {message}",
+                text_color=self.theme['log_error']
+            )
+
+    def fetch_9proxy_list(self):
+        """Загрузить список прокси через 9Proxy API"""
+        if not self.nine_proxy_manager:
+            if self.toast:
+                self.toast.warning("⚠️ Сначала включите 9Proxy")
+            return
+
+        # Собрать параметры фильтров
+        country = self.nine_proxy_country_var.get().strip() if self.nine_proxy_country_var.get() else None
+        city = self.nine_proxy_city_entry.get().strip() if self.nine_proxy_city_entry.get() else None
+        isp = self.nine_proxy_isp_entry.get().strip() if self.nine_proxy_isp_entry.get() else None
+        plan = self.nine_proxy_plan_var.get() if self.nine_proxy_plan_var.get() != "all" else None
+        today = self.nine_proxy_today_var.get()
+        num = int(self.nine_proxy_count_var.get()) if self.nine_proxy_count_var.get().isdigit() else 10
+
+        if self.toast:
+            self.toast.info("📥 Загружаю прокси через 9Proxy API...")
+
+        def fetch_thread():
+            success, message, proxies = self.nine_proxy_manager.fetch_proxies(
+                country=country,
+                city=city,
+                isp=isp,
+                plan=plan,
+                today=today,
+                num=num
+            )
+
+            # Обновить UI в главном потоке
+            self.after(0, lambda: self.handle_fetch_result(success, message, proxies))
+
+        thread = threading.Thread(target=fetch_thread, daemon=True)
+        thread.start()
+
+    def handle_fetch_result(self, success: bool, message: str, proxies: List[Dict]):
+        """Обработать результат загрузки прокси"""
+        if success:
+            # Обновить счетчик
+            self.nine_proxy_count_label.configure(text=f"Pool: {len(proxies)} proxies")
+
+            # Показать первый прокси
+            if proxies:
+                first_proxy = proxies[0]
+                proxy_str = f"{first_proxy.get('ip')}:{first_proxy.get('port', 8080)}"
+                self.nine_proxy_current_label.configure(text=f"Current: {proxy_str}")
+
+            if self.toast:
+                self.toast.success(message)
+
+            # Логирование
+            print(f"[9PROXY] {message}")
+            for i, p in enumerate(proxies[:5], 1):  # Показать первые 5
+                print(f"[9PROXY]   {i}. {p.get('ip')}:{p.get('port', 8080)} ({p.get('country_code')}, {'Online' if p.get('is_online') else 'Offline'})")
+
+        else:
+            if self.toast:
+                self.toast.error(message)
+            print(f"[9PROXY ERROR] {message}")
+
+    def rotate_9proxy_now(self):
+        """Принудительная ротация прокси"""
+        if not self.nine_proxy_manager or not self.nine_proxy_manager.proxy_pool:
+            if self.toast:
+                self.toast.warning("⚠️ Сначала загрузите прокси")
+            return
+
+        strategy = self.nine_proxy_strategy_var.get()
+        next_proxy = self.nine_proxy_manager.rotate_proxy(strategy)
+
+        if next_proxy:
+            proxy_str = f"{next_proxy.get('ip')}:{next_proxy.get('port', 8080)}"
+            self.nine_proxy_current_label.configure(text=f"Current: {proxy_str}")
+
+            if self.toast:
+                self.toast.success(f"🔄 Прокси сменен: {proxy_str}")
+
+            print(f"[9PROXY] Ротация на: {proxy_str} (Country: {next_proxy.get('country_code')}, Online: {next_proxy.get('is_online')})")
+        else:
+            if self.toast:
+                self.toast.error("❌ Не удалось выбрать прокси")
+
+    def save_9proxy_settings(self):
+        """Сохранить настройки 9Proxy в config"""
+        if 'nine_proxy' not in self.config:
+            self.config['nine_proxy'] = {}
+
+        self.config['nine_proxy'] = {
+            'enabled': self.nine_proxy_enable_var.get(),
+            'api_url': self.nine_proxy_url_entry.get().strip(),
+            'filters': {
+                'country': self.nine_proxy_country_var.get(),
+                'city': self.nine_proxy_city_entry.get().strip(),
+                'isp': self.nine_proxy_isp_entry.get().strip(),
+                'plan': self.nine_proxy_plan_var.get(),
+                'today': self.nine_proxy_today_var.get(),
+                'num': int(self.nine_proxy_count_var.get()) if self.nine_proxy_count_var.get().isdigit() else 10
+            },
+            'rotation': {
+                'auto_rotate': self.nine_proxy_auto_rotate_var.get(),
+                'strategy': self.nine_proxy_strategy_var.get(),
+                'skip_offline': self.nine_proxy_skip_offline_var.get()
+            }
+        }
+
+        # Централизованное сохранение
+        if self.save_callback:
+            self.save_callback()
+
+        if self.toast:
+            self.toast.success("💾 Настройки 9Proxy сохранены")
+
+        print(f"[9PROXY] Настройки сохранены: enabled={self.nine_proxy_enable_var.get()}, country={self.nine_proxy_country_var.get()}")
+
+    def load_9proxy_settings(self):
+        """Загрузить настройки 9Proxy из config"""
+        nine_proxy_config = self.config.get('nine_proxy', {})
+
+        if not nine_proxy_config:
+            return
+
+        # Основные настройки
+        enabled = nine_proxy_config.get('enabled', False)
+        self.nine_proxy_enable_var.set(enabled)
+
+        api_url = nine_proxy_config.get('api_url', 'http://localhost:50000')
+        self.nine_proxy_url_entry.delete(0, 'end')
+        self.nine_proxy_url_entry.insert(0, api_url)
+
+        # Фильтры
+        filters = nine_proxy_config.get('filters', {})
+        if filters.get('country'):
+            self.nine_proxy_country_var.set(filters['country'])
+        if filters.get('city'):
+            self.nine_proxy_city_entry.insert(0, filters['city'])
+        if filters.get('isp'):
+            self.nine_proxy_isp_entry.insert(0, filters['isp'])
+        if filters.get('plan'):
+            self.nine_proxy_plan_var.set(filters['plan'])
+        if 'today' in filters:
+            self.nine_proxy_today_var.set(filters['today'])
+        if filters.get('num'):
+            self.nine_proxy_count_var.set(str(filters['num']))
+
+        # Настройки ротации
+        rotation = nine_proxy_config.get('rotation', {})
+        if 'auto_rotate' in rotation:
+            self.nine_proxy_auto_rotate_var.set(rotation['auto_rotate'])
+        if rotation.get('strategy'):
+            self.nine_proxy_strategy_var.set(rotation['strategy'])
+        if 'skip_offline' in rotation:
+            self.nine_proxy_skip_offline_var.set(rotation['skip_offline'])
+
+        # Если enabled, инициализировать менеджер
+        if enabled:
+            self.nine_proxy_manager = NineProxyManager(api_url)
+            self.nine_proxy_manager.enabled = True
+            self.nine_proxy_enabled = True
+            print(f"[9PROXY] Загружены настройки: enabled=True, api_url={api_url}")
+
+    def get_9proxy_manager(self) -> Optional[NineProxyManager]:
+        """Получить экземпляр 9Proxy Manager для использования в других модулях"""
+        return self.nine_proxy_manager if self.nine_proxy_enabled else None
 
     def add_proxy(self):
         """Добавить новый прокси"""
