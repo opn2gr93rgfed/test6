@@ -1667,6 +1667,10 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
 
         # Единый return code (всегда возвращаем extracted_fields, даже если они пустые)
         network_return_code = '''
+        # Ожидание финальных validate запросов (они приходят асинхронно после последних действий)
+        print("[NETWORK_CAPTURE] Ожидание финальных validate запросов (20 сек)...", flush=True)
+        page2.wait_for_timeout(20000)
+
         # 🌐 Вывод захваченных данных (если есть)
         print(f"\\n[NETWORK_CAPTURE] === ИТОГОВЫЕ ДАННЫЕ ===")
         print(f"[NETWORK_CAPTURE] Обработано network responses: {{total_responses_counter}}", flush=True)
