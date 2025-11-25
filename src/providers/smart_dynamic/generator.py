@@ -1261,16 +1261,27 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
 
                 visible_headings_count += 1
 
-                # Получить текст вопроса с retry (элемент может быть не готов)
-                question_text = heading.inner_text().strip()
+                # Получить текст вопроса с агрессивным retry (элемент может быть не готов)
+                question_text = ""
+                max_retries = 3
 
-                # RETRY: если текст пустой, подождать и попробовать еще раз
-                if not question_text or len(question_text) < 3:
-                    time.sleep(0.5)  # Короткая пауза
+                for attempt in range(max_retries):
                     try:
                         question_text = heading.inner_text().strip()
-                    except:
-                        pass  # Если снова не получилось - пропускаем
+
+                        # Если текст есть и не пустой - отлично
+                        if question_text and len(question_text) >= 3:
+                            break
+
+                        # Если пустой и это не последняя попытка - ждем дольше
+                        if attempt < max_retries - 1:
+                            wait_time = 1.0 * (attempt + 1)  # 1s, 2s, 3s
+                            time.sleep(wait_time)
+                    except Exception as e:
+                        if attempt < max_retries - 1:
+                            time.sleep(1.0)
+                        else:
+                            pass  # Последняя попытка failed - пропускаем
 
                 # DEBUG: показываем все heading что находим
                 if answered_count == 0 and visible_headings_count <= 5:  # Первые 5 видимых
