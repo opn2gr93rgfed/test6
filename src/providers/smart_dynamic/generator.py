@@ -1109,11 +1109,14 @@ QUESTIONS_POOL = {pool_json}
 def normalize_text(text: str) -> str:
     """Нормализует текст для сравнения - убирает спецсимволы, лишние пробелы"""
     import re
-    # Убираем ВСЕ знаки препинания (точки, запятые, вопросы, восклицания, звездочки и т.д.)
-    text = re.sub(r"[*?.!,;:'\\"()-]", "", text)
+    # Убираем ВСЕ знаки препинания, включая Unicode апострофы и кавычки
+    # ASCII: ' " `
+    # Unicode: ' ' " " – — (типографские кавычки, апострофы, тире)
+    text = re.sub(r"[*?.!,;:'\"''""`()\\-]", "", text)
     # Убираем множественные пробелы
     text = re.sub(r"\\s+", " ", text)
     return text.strip().lower()
+
 
 
 def find_question_in_pool(question_text: str, pool: Dict, debug: bool = False) -> Optional[str]:
