@@ -2132,6 +2132,7 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
                 '.click(',
                 '.fill(',
                 '.press(',
+                '.press_sequentially(',  # ВАЖНО: для симуляции набора текста
                 '.type(',
                 '.select_option(',
                 '.check(',
