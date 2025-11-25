@@ -874,9 +874,11 @@ def get_proxy_for_thread(thread_id: int, iteration_number: int) -> Optional[Dict
             _proxy_counter += 1
         print(f"[PROXY] [ROUND-ROBIN] Thread {thread_id}, Iteration {iteration_number}: прокси #{index + 1}/{len(PROXY_LIST)}")
     elif PROXY_ROTATION_MODE == 'sticky':
-        index = thread_id % len(PROXY_LIST)
+        # 🔥 ИСПРАВЛЕНО: Используем iteration_number вместо thread_id
+        # thread_id повторяется для разных итераций, iteration_number уникален!
+        index = (iteration_number - 1) % len(PROXY_LIST)
         proxy_string = PROXY_LIST[index]
-        print(f"[PROXY] [STICKY] Thread {thread_id}: закреплен за прокси #{index + 1}")
+        print(f"[PROXY] [STICKY] Iteration {iteration_number}: прокси #{index + 1}/{len(PROXY_LIST)}")
     else:
         proxy_string = PROXY_LIST[0]
 
