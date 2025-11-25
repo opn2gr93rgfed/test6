@@ -461,6 +461,11 @@ MAX_ITERATIONS = {max_iterations if max_iterations is not None else 'None'}
 # Lock для синхронизации записи в CSV файл (защита от race condition)
 csv_write_lock = threading.Lock()
 
+# Thread-local storage для закрепления портов за реальными worker threads
+_thread_to_port_lock = threading.Lock()
+_thread_to_port_map = {}  # Mapping: thread_ident -> port_index
+_next_port_index = 0  # Счетчик для назначения портов
+
 '''
 
         # Прокси конфигурация
@@ -643,8 +648,11 @@ def get_nine_proxy_for_thread(thread_id: int) -> Optional[Dict]:
     """
     Получить конфигурацию 9Proxy для потока
 
+    Использует реальный worker thread ID для постоянного назначения портов.
+    Каждый worker thread получает свой порт при первом вызове и использует его всегда.
+
     Args:
-        thread_id: ID потока (0-based: 0, 1, 2, ...)
+        thread_id: ID потока из task (игнорируется, используется реальный thread)
 
     Returns:
         Dict с настройками прокси для Octobrowser или None
@@ -652,12 +660,28 @@ def get_nine_proxy_for_thread(thread_id: int) -> Optional[Dict]:
     if not NINE_PROXY_ENABLED or not NINE_PROXY_PORTS:
         return None
 
-    # Получить порт для этого потока (детерминированное назначение)
-    port_index = thread_id % len(NINE_PROXY_PORTS)
+    import threading
+    global _thread_to_port_lock, _thread_to_port_map, _next_port_index
+
+    # Получить реальный ID текущего worker thread
+    real_thread_id = threading.current_thread().ident
+
+    # Потокобезопасно проверить/назначить порт для этого worker thread
+    with _thread_to_port_lock:
+        if real_thread_id not in _thread_to_port_map:
+            # Первый вызов для этого worker thread - назначаем порт
+            port_index = _next_port_index % len(NINE_PROXY_PORTS)
+            _thread_to_port_map[real_thread_id] = port_index
+            _next_port_index += 1
+            print(f"[9PROXY MAPPING] Worker Thread {real_thread_id} -> Port Index {port_index} (ПЕРВОЕ НАЗНАЧЕНИЕ)")
+        else:
+            # Worker thread уже имеет назначенный порт
+            port_index = _thread_to_port_map[real_thread_id]
+
     port = NINE_PROXY_PORTS[port_index]
 
-    # Детальное логирование для отладки назначения портов
-    print(f"[9PROXY MAPPING] Thread ID (0-based): {thread_id} -> Port Index: {port_index} -> Port: {port}")
+    # Детальное логирование
+    print(f"[9PROXY MAPPING] Worker Thread {real_thread_id} -> Port Index: {port_index} -> Port: {port}")
 
     return {
         'type': 'socks5',
@@ -683,8 +707,6 @@ def initialize_nine_proxy_ports() -> bool:
     print(f"[9PROXY INIT] Проверка {len(NINE_PROXY_PORTS)} портов...")
     print(f"[9PROXY INIT] API URL: {NINE_PROXY_API_URL}")
     print(f"[9PROXY INIT] Порты: {NINE_PROXY_PORTS}")
-    print(f"[9PROXY INIT] [INFO] Порты УЖЕ настроены и переадресуют на реальные IP")
-    print(f"[9PROXY INIT] [INFO] Для смены IP используется /api/forward после каждой итерации")
 
     try:
         import requests
@@ -698,6 +720,14 @@ def initialize_nine_proxy_ports() -> bool:
 
         if response.status_code == 200:
             print(f"[9PROXY INIT] [OK] API доступен")
+
+            # Проинициализировать каждый порт с правильными фильтрами
+            print(f"[9PROXY INIT] Инициализация портов с фильтрами...")
+            for port in NINE_PROXY_PORTS:
+                print(f"[9PROXY INIT] Настройка порта {port}...")
+                rotate_proxy_for_port(port)
+
+            print(f"[9PROXY INIT] [OK] Все порты настроены")
             return True
         else:
             print(f"[9PROXY INIT] [WARNING] API недоступен: HTTP {response.status_code}")
@@ -2791,10 +2821,12 @@ def process_task(task_data: tuple) -> Dict:
 
         # 🔥 Ротация 9Proxy после завершения итерации
         if NINE_PROXY_ENABLED and NINE_PROXY_AUTO_ROTATE and NINE_PROXY_PORTS:
-            port_index = (thread_id - 1) % len(NINE_PROXY_PORTS)
-            port = NINE_PROXY_PORTS[port_index]
-            print(f"[9PROXY ROTATION] Thread {thread_id} (port_index={port_index}) -> Rotating port {port}")
-            rotate_proxy_for_port(port)
+            # Получаем порт для этого worker thread (использует реальный thread ID)
+            nine_proxy_dict = get_nine_proxy_for_thread(thread_id)
+            if nine_proxy_dict:
+                port = int(nine_proxy_dict['port'])
+                print(f"[9PROXY ROTATION] Worker Thread (task thread_id={thread_id}) -> Rotating port {port}")
+                rotate_proxy_for_port(port)
 
         # Итоги обработки
         if result['success']:
