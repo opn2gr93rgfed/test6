@@ -68,6 +68,15 @@ class Generator:
         nine_proxy_strategy = config.get('nine_proxy_strategy', 'sequential')
         nine_proxy_auto_rotate = config.get('nine_proxy_auto_rotate', True)
 
+        # 🔥 Получить фильтры из nine_proxy config
+        nine_proxy_config = config.get('nine_proxy', {})
+        nine_proxy_filters = nine_proxy_config.get('filters', {})
+        nine_proxy_country = nine_proxy_filters.get('country', '')
+        nine_proxy_state = nine_proxy_filters.get('state', '')
+        nine_proxy_city = nine_proxy_filters.get('city', '')
+        nine_proxy_isp = nine_proxy_filters.get('isp', '')
+        nine_proxy_plan = nine_proxy_filters.get('plan', 'all')
+
         # Debug вывод
         print(f"[GENERATOR DEBUG] 9Proxy настройки получены:")
         print(f"[GENERATOR DEBUG]   - nine_proxy_enabled: {nine_proxy_enabled}")
@@ -75,6 +84,9 @@ class Generator:
         print(f"[GENERATOR DEBUG]   - nine_proxy_api_url: {nine_proxy_api_url}")
         print(f"[GENERATOR DEBUG]   - nine_proxy_strategy: {nine_proxy_strategy}")
         print(f"[GENERATOR DEBUG]   - nine_proxy_auto_rotate: {nine_proxy_auto_rotate}")
+        print(f"[GENERATOR DEBUG]   - nine_proxy_country: {nine_proxy_country}")
+        print(f"[GENERATOR DEBUG]   - nine_proxy_state: {nine_proxy_state}")
+        print(f"[GENERATOR DEBUG]   - nine_proxy_city: {nine_proxy_city}")
 
         # Симуляция ввода текста
         self.simulate_typing = config.get('simulate_typing', True)
@@ -88,7 +100,8 @@ class Generator:
 
         script = self._generate_imports()
         script += self._generate_config(api_token, proxy_config, proxy_list_config, threads_count, max_iterations,
-                                        nine_proxy_enabled, nine_proxy_api_url, nine_proxy_ports, nine_proxy_strategy, nine_proxy_auto_rotate)
+                                        nine_proxy_enabled, nine_proxy_api_url, nine_proxy_ports, nine_proxy_strategy, nine_proxy_auto_rotate,
+                                        nine_proxy_country, nine_proxy_state, nine_proxy_city, nine_proxy_isp, nine_proxy_plan)
         script += self._generate_proxy_rotation()
         script += self._generate_nine_proxy_rotation()  # 🔥 9Proxy функция ротации
         script += self._generate_octobrowser_functions(profile_config)
@@ -424,7 +437,9 @@ from typing import Dict, List, Optional
 
     def _generate_config(self, api_token: str, proxy_config: Dict, proxy_list_config: Dict, threads_count: int, max_iterations: int = None,
                          nine_proxy_enabled: bool = False, nine_proxy_api_url: str = '', nine_proxy_ports: List = [],
-                         nine_proxy_strategy: str = 'sequential', nine_proxy_auto_rotate: bool = True) -> str:
+                         nine_proxy_strategy: str = 'sequential', nine_proxy_auto_rotate: bool = True,
+                         nine_proxy_country: str = '', nine_proxy_state: str = '', nine_proxy_city: str = '',
+                         nine_proxy_isp: str = '', nine_proxy_plan: str = 'all') -> str:
         config = f'''# ============================================================
 # КОНФИГУРАЦИЯ
 # ============================================================
@@ -477,12 +492,20 @@ PROXY_PASSWORD = "{proxy_config.get('password', '')}"
 
         # 🔥 9Proxy конфигурация
         if nine_proxy_enabled and nine_proxy_ports:
+            plan_value = '1' if nine_proxy_plan == 'premium' else '2' if nine_proxy_plan == 'free' else ''
             config += f'''# 🔥 9Proxy API Dynamic Rotation
 NINE_PROXY_ENABLED = True
 NINE_PROXY_API_URL = "{nine_proxy_api_url}"
 NINE_PROXY_PORTS = {nine_proxy_ports}  # [6001, 6002, ...]
 NINE_PROXY_STRATEGY = "{nine_proxy_strategy}"
 NINE_PROXY_AUTO_ROTATE = {nine_proxy_auto_rotate}
+
+# 9Proxy фильтры
+NINE_PROXY_COUNTRY = "{nine_proxy_country}"
+NINE_PROXY_STATE = "{nine_proxy_state}"
+NINE_PROXY_CITY = "{nine_proxy_city}"
+NINE_PROXY_ISP = "{nine_proxy_isp}"
+NINE_PROXY_PLAN = "{plan_value}"
 
 '''
         else:
@@ -530,10 +553,41 @@ def rotate_proxy_for_port(port: int) -> bool:
     try:
         import requests
 
-        # Получить новый прокси из API
+        # Подготовить параметры запроса с фильтрами
+        params = {'num': 1, 't': 2}
+
+        # Добавить фильтры если они указаны
+        if NINE_PROXY_COUNTRY:
+            params['country'] = NINE_PROXY_COUNTRY
+        if NINE_PROXY_STATE:
+            params['state'] = NINE_PROXY_STATE
+        if NINE_PROXY_CITY:
+            params['city'] = NINE_PROXY_CITY
+        if NINE_PROXY_ISP:
+            params['isp'] = NINE_PROXY_ISP
+        if NINE_PROXY_PLAN:
+            params['plan'] = NINE_PROXY_PLAN
+
+        # Логирование запроса с фильтрами
+        filter_info = []
+        if NINE_PROXY_COUNTRY:
+            filter_info.append(f"country={NINE_PROXY_COUNTRY}")
+        if NINE_PROXY_STATE:
+            filter_info.append(f"state={NINE_PROXY_STATE}")
+        if NINE_PROXY_CITY:
+            filter_info.append(f"city={NINE_PROXY_CITY}")
+        if NINE_PROXY_ISP:
+            filter_info.append(f"isp={NINE_PROXY_ISP}")
+        if NINE_PROXY_PLAN:
+            filter_info.append(f"plan={NINE_PROXY_PLAN}")
+
+        filter_str = ", ".join(filter_info) if filter_info else "без фильтров"
+        print(f"[9PROXY] Запрос прокси для порта {port} ({filter_str})")
+
+        # Получить новый прокси из API с фильтрами
         response = requests.get(
             f"{NINE_PROXY_API_URL}/api/proxy",
-            params={'num': 1, 't': 2},
+            params=params,
             timeout=5
         )
 
@@ -543,27 +597,36 @@ def rotate_proxy_for_port(port: int) -> bool:
 
         data = response.json()
         if data.get('error') or not data.get('data'):
-            print(f"[9PROXY] [ERROR] Нет доступных прокси")
+            print(f"[9PROXY] [ERROR] Нет доступных прокси с указанными фильтрами")
             return False
 
         proxy = data['data'][0]
         proxy_id = proxy.get('id')
+        proxy_ip = proxy.get('ip', 'unknown')
+        proxy_country = proxy.get('country_code', 'unknown')
 
         if not proxy_id:
             print(f"[9PROXY] [ERROR] Прокси не имеет ID")
             return False
 
+        # Определить план для forward запроса
+        forward_plan = NINE_PROXY_PLAN if NINE_PROXY_PLAN else '2'  # default to free
+
         # Переадресовать на наш порт
+        forward_params = {'id': proxy_id, 'port': port, 't': 2}
+        if forward_plan:
+            forward_params['plan'] = forward_plan
+
         forward_response = requests.get(
             f"{NINE_PROXY_API_URL}/api/forward",
-            params={'id': proxy_id, 'port': port, 't': 2, 'plan': '2'},
+            params=forward_params,
             timeout=5
         )
 
         if forward_response.status_code == 200:
             forward_data = forward_response.json()
             if not forward_data.get('error'):
-                print(f"[9PROXY] [OK] Порт {port} обновлён -> {proxy.get('ip')} ({proxy.get('country_code')})")
+                print(f"[9PROXY] [OK] Порт {port} обновлен -> {proxy_ip} ({proxy_country}) [ID: {proxy_id}]")
                 return True
             else:
                 print(f"[9PROXY] [ERROR] Forward ошибка: {forward_data.get('message')}")
@@ -581,7 +644,7 @@ def get_nine_proxy_for_thread(thread_id: int) -> Optional[Dict]:
     Получить конфигурацию 9Proxy для потока
 
     Args:
-        thread_id: ID потока (0, 1, 2, ...)
+        thread_id: ID потока (0-based: 0, 1, 2, ...)
 
     Returns:
         Dict с настройками прокси для Octobrowser или None
@@ -589,12 +652,12 @@ def get_nine_proxy_for_thread(thread_id: int) -> Optional[Dict]:
     if not NINE_PROXY_ENABLED or not NINE_PROXY_PORTS:
         return None
 
-    # Получить порт для этого потока
-    if thread_id >= len(NINE_PROXY_PORTS):
-        # Если потоков больше чем портов - зациклить
-        port = NINE_PROXY_PORTS[thread_id % len(NINE_PROXY_PORTS)]
-    else:
-        port = NINE_PROXY_PORTS[thread_id]
+    # Получить порт для этого потока (детерминированное назначение)
+    port_index = thread_id % len(NINE_PROXY_PORTS)
+    port = NINE_PROXY_PORTS[port_index]
+
+    # Детальное логирование для отладки назначения портов
+    print(f"[9PROXY MAPPING] Thread ID (0-based): {thread_id} -> Port Index: {port_index} -> Port: {port}")
 
     return {
         'type': 'socks5',
@@ -715,9 +778,11 @@ def get_proxy_for_thread(thread_id: int, iteration_number: int) -> Optional[Dict
 
     # 🔥 Приоритет 1: 9Proxy API (если включен)
     if NINE_PROXY_ENABLED and NINE_PROXY_PORTS:
-        nine_proxy_dict = get_nine_proxy_for_thread(thread_id - 1)  # thread_id в Octobrowser начинается с 1
+        # Преобразуем thread_id из 1-based в 0-based для индексации
+        thread_index = thread_id - 1
+        nine_proxy_dict = get_nine_proxy_for_thread(thread_index)
         if nine_proxy_dict:
-            print(f"[9PROXY] Thread {thread_id}, Iteration {iteration_number}: используется порт {nine_proxy_dict['port']}")
+            print(f"[9PROXY ASSIGN] Thread {thread_id} (1-based), Iteration {iteration_number} -> Port {nine_proxy_dict['port']}")
             return nine_proxy_dict
 
     # Приоритет 2: Список прокси (если USE_PROXY_LIST включен)
@@ -2727,7 +2792,7 @@ def process_task(task_data: tuple) -> Dict:
         if NINE_PROXY_ENABLED and NINE_PROXY_AUTO_ROTATE and NINE_PROXY_PORTS:
             port_index = (thread_id - 1) % len(NINE_PROXY_PORTS)
             port = NINE_PROXY_PORTS[port_index]
-            print(f"[9PROXY] Thread {thread_id}: ротация IP для порта {port}...")
+            print(f"[9PROXY ROTATION] Thread {thread_id} (port_index={port_index}) -> Rotating port {port}")
             rotate_proxy_for_port(port)
 
         # Итоги обработки

@@ -1169,10 +1169,13 @@ class ModernAppV3(ctk.CTk):
                         port = int(proxy.split(':')[1])
                         nine_proxy_ports.append(port)
 
-                # Если портов недостаточно - зациклим
-                if len(nine_proxy_ports) < threads_count:
+                # Если портов недостаточно - зациклим (используем уже собранные порты)
+                if len(nine_proxy_ports) < threads_count and len(nine_proxy_ports) > 0:
+                    original_count = len(nine_proxy_ports)
                     while len(nine_proxy_ports) < threads_count:
-                        nine_proxy_ports.append(nine_proxy_ports[len(nine_proxy_ports) % len(nine_proxy_manager.proxy_pool)])
+                        # Берём порт по модулю от количества уже собранных портов
+                        port_index = len(nine_proxy_ports) % original_count
+                        nine_proxy_ports.append(nine_proxy_ports[port_index])
 
                 print(f"[9PROXY] Порты для потоков: {nine_proxy_ports}")
             elif nine_proxy_enabled:
