@@ -1155,6 +1155,10 @@ def find_question_in_pool(question_text: str, pool: Dict, debug: bool = False) -
     if debug:
         print(f"[SEARCH] Ищу вопрос: '{question_text}'")
         print(f"[SEARCH] Нормализован: '{normalized_question}'")
+        print(f"[SEARCH] Длина нормализованного: {len(normalized_question)}")
+
+    best_match = None
+    best_ratio = 0
 
     for pool_key in pool.keys():
         normalized_key = normalize_text(pool_key)
@@ -1162,25 +1166,39 @@ def find_question_in_pool(question_text: str, pool: Dict, debug: bool = False) -
         # Точное совпадение нормализованных
         if normalized_question == normalized_key:
             if debug:
-                print(f"[SEARCH] [OK] НАЙДЕНО (нормализованное): '{pool_key}'")
+                print(f"[SEARCH] [OK] НАЙДЕНО (точное совпадение): '{pool_key}'")
             return pool_key
 
         # Частичное совпадение - pool_key содержится в question_text или наоборот
         if normalized_key in normalized_question or normalized_question in normalized_key:
-            # Проверяем что это действительно похожие вопросы (>50% совпадение длины)
+            # Проверяем что это действительно похожие вопросы (>45% совпадение длины)
             len_ratio = min(len(normalized_key), len(normalized_question)) / max(len(normalized_key), len(normalized_question))
-            if len_ratio > 0.50:
-                if debug:
-                    print(f"[SEARCH] [OK] НАЙДЕНО (частичное, ratio={len_ratio:.2f}): '{pool_key}'")
-                return pool_key
+
+            if debug:
+                print(f"[SEARCH] Проверка '{pool_key[:60]}...': ratio={len_ratio:.2f}")
+
+            if len_ratio > 0.45:  # Снижен порог с 0.50 до 0.45
+                if len_ratio > best_ratio:
+                    best_match = pool_key
+                    best_ratio = len_ratio
+
+    if best_match:
+        if debug:
+            print(f"[SEARCH] [OK] НАЙДЕНО (частичное, ratio={best_ratio:.2f}): '{best_match}'")
+        return best_match
 
     if debug:
         print(f"[SEARCH] [FAIL] НЕ НАЙДЕНО")
         print(f"[SEARCH] Доступные ключи в пуле (всего {len(pool)}):")
-        # Показываем ВСЕ вопросы, чтобы увидеть что в пуле
+        # Показываем ВСЕ вопросы с их нормализованной версией И len_ratio
         for i, key in enumerate(list(pool.keys()), 1):
             normalized = normalize_text(key)
-            print(f"[SEARCH]   {i}. '{key}' -> '{normalized}'")
+            # Считаем ratio для диагностики
+            if normalized_key in normalized_question or normalized_question in normalized:
+                ratio = min(len(normalized), len(normalized_question)) / max(len(normalized), len(normalized_question))
+                print(f"[SEARCH]   {i}. ratio={ratio:.2f} '{key}' -> '{normalized}'")
+            else:
+                print(f"[SEARCH]   {i}. ratio=N/A '{key}' -> '{normalized}'")
 
     return None
 
