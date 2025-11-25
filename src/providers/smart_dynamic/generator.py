@@ -405,6 +405,9 @@ THREADS_COUNT = {threads_count}
 # Лимит итераций (None = обработать все строки CSV)
 MAX_ITERATIONS = {max_iterations if max_iterations is not None else 'None'}
 
+# Lock для синхронизации записи в CSV файл (защита от race condition)
+csv_write_lock = threading.Lock()
+
 '''
 
         # Прокси конфигурация
@@ -952,43 +955,57 @@ def mark_row_in_progress(csv_file_path: str, row_index: int, fieldnames: list):
     """
     Помечает строку как взятую в работу - ставит звездочку (*) в колонку с индексом 1
 
+    ПОТОКОБЕЗОПАСНО: использует csv_write_lock для синхронизации
+
     Args:
         csv_file_path: Путь к CSV файлу
         row_index: Индекс строки в CSV (0-based, не считая заголовок)
         fieldnames: Список имен полей (заголовков)
     """
-    try:
-        # Читаем весь CSV
-        all_rows = []
-        with open(csv_file_path, 'r', encoding='utf-8', newline='') as f:
-            reader = csv.DictReader(f)
-            all_rows = list(reader)
+    # КРИТИЧНО: блокируем доступ к файлу для избежания race condition
+    with csv_write_lock:
+        try:
+            # Читаем весь CSV
+            all_rows = []
+            actual_fieldnames = []
 
-        # Проверяем что индекс валидный
-        if row_index < 0 or row_index >= len(all_rows):
-            print(f"[MARK] [ERROR] Неверный индекс строки: {row_index}")
-            return
+            with open(csv_file_path, 'r', encoding='utf-8', newline='') as f:
+                reader = csv.DictReader(f)
+                actual_fieldnames = list(reader.fieldnames) if reader.fieldnames else fieldnames
+                all_rows = list(reader)
 
-        # Получаем имя второго поля (индекс 1)
-        if len(fieldnames) < 2:
-            print(f"[MARK] [ERROR] CSV должен иметь минимум 2 колонки")
-            return
+            # Проверяем что файл не пустой
+            if not all_rows:
+                print(f"[MARK] [ERROR] CSV файл пустой!")
+                return
 
-        second_field_name = fieldnames[1]
+            # Проверяем что индекс валидный
+            if row_index < 0 or row_index >= len(all_rows):
+                print(f"[MARK] [ERROR] Неверный индекс строки: {row_index} (всего строк: {len(all_rows)})")
+                return
 
-        # Ставим звездочку в колонке с индексом 1
-        all_rows[row_index][second_field_name] = "*"
+            # Получаем имя второго поля (индекс 1)
+            if len(actual_fieldnames) < 2:
+                print(f"[MARK] [ERROR] CSV должен иметь минимум 2 колонки")
+                return
 
-        # Перезаписываем файл
-        with open(csv_file_path, 'w', encoding='utf-8', newline='') as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
-            writer.writeheader()
-            writer.writerows(all_rows)
+            second_field_name = actual_fieldnames[1]
 
-        print(f"[MARK] [OK] Строка {row_index + 1} помечена как взятая в работу (*)")
+            # Ставим звездочку в колонке с индексом 1
+            all_rows[row_index][second_field_name] = "*"
 
-    except Exception as e:
-        print(f"[MARK] [ERROR] Не удалось пометить строку: {e}")
+            # Перезаписываем файл
+            with open(csv_file_path, 'w', encoding='utf-8', newline='') as f:
+                writer = csv.DictWriter(f, fieldnames=actual_fieldnames)
+                writer.writeheader()
+                writer.writerows(all_rows)
+
+            print(f"[MARK] [OK] Строка {row_index + 1} помечена как взятая в работу (*)")
+
+        except Exception as e:
+            print(f"[MARK] [ERROR] Не удалось пометить строку: {e}")
+            import traceback
+            traceback.print_exc()
 
 
 def load_csv_data() -> tuple:
