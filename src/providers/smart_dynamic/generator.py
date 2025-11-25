@@ -612,11 +612,19 @@ def rotate_proxy_for_port(port: int) -> bool:
 
         if response.status_code != 200:
             print(f"[9PROXY] [ERROR] Ошибка получения прокси: HTTP {response.status_code}")
+            print(f"[9PROXY] [DEBUG] Response text: {response.text[:200]}")
             return False
 
         data = response.json()
-        if data.get('error') or not data.get('data'):
+        print(f"[9PROXY] [DEBUG] API response: {data}")
+
+        if data.get('error'):
+            print(f"[9PROXY] [ERROR] API вернул ошибку: {data.get('error')}")
+            return False
+
+        if not data.get('data'):
             print(f"[9PROXY] [ERROR] Нет доступных прокси с указанными фильтрами")
+            print(f"[9PROXY] [DEBUG] Full response: {data}")
             return False
 
         proxy = data['data'][0]
@@ -636,26 +644,35 @@ def rotate_proxy_for_port(port: int) -> bool:
         if forward_plan:
             forward_params['plan'] = forward_plan
 
+        print(f"[9PROXY] [DEBUG] Forward request: {NINE_PROXY_API_URL}/api/forward?{forward_params}")
+
         forward_response = requests.get(
             f"{NINE_PROXY_API_URL}/api/forward",
             params=forward_params,
             timeout=5
         )
 
+        print(f"[9PROXY] [DEBUG] Forward response status: {forward_response.status_code}")
+
         if forward_response.status_code == 200:
             forward_data = forward_response.json()
+            print(f"[9PROXY] [DEBUG] Forward response data: {forward_data}")
+
             if not forward_data.get('error'):
                 print(f"[9PROXY] [OK] Порт {port} обновлен -> {proxy_ip} ({proxy_country}) [ID: {proxy_id}]")
                 return True
             else:
-                print(f"[9PROXY] [ERROR] Forward ошибка: {forward_data.get('message')}")
+                print(f"[9PROXY] [ERROR] Forward ошибка: {forward_data.get('message')} | Full error: {forward_data.get('error')}")
                 return False
         else:
             print(f"[9PROXY] [ERROR] Ошибка forward: HTTP {forward_response.status_code}")
+            print(f"[9PROXY] [DEBUG] Forward response text: {forward_response.text[:200]}")
             return False
 
     except Exception as e:
         print(f"[9PROXY] [ERROR] Ошибка ротации порта {port}: {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
 def get_nine_proxy_for_thread(thread_id: int) -> Optional[Dict]:
@@ -2834,13 +2851,22 @@ def process_task(task_data: tuple) -> Dict:
         stop_profile(profile_uuid)
 
         # 🔥 Ротация 9Proxy после завершения итерации
-        if NINE_PROXY_ENABLED and NINE_PROXY_AUTO_ROTATE and NINE_PROXY_PORTS:
-            # Получаем порт для этого worker thread (использует реальный thread ID)
-            nine_proxy_dict = get_nine_proxy_for_thread(thread_id)
-            if nine_proxy_dict:
-                port = int(nine_proxy_dict['port'])
-                print(f"[9PROXY ROTATION] Worker Thread (task thread_id={thread_id}) -> Rotating port {port}")
-                rotate_proxy_for_port(port)
+        if NINE_PROXY_ENABLED and NINE_PROXY_PORTS:
+            if NINE_PROXY_AUTO_ROTATE:
+                # Получаем порт для этого worker thread (использует реальный thread ID)
+                nine_proxy_dict = get_nine_proxy_for_thread(thread_id)
+                if nine_proxy_dict:
+                    port = int(nine_proxy_dict['port'])
+                    print(f"[9PROXY ROTATION] Worker Thread (task thread_id={thread_id}) -> Rotating port {port}")
+                    rotation_success = rotate_proxy_for_port(port)
+                    if rotation_success:
+                        print(f"[9PROXY ROTATION] [OK] Порт {port} успешно ротирован")
+                    else:
+                        print(f"[9PROXY ROTATION] [ERROR] Не удалось ротировать порт {port}")
+                else:
+                    print(f"[9PROXY ROTATION] [ERROR] Не удалось получить порт для worker thread")
+            else:
+                print(f"[9PROXY ROTATION] [SKIP] Авто-ротация отключена (NINE_PROXY_AUTO_ROTATE=False)")
 
         # Итоги обработки
         if result['success']:
