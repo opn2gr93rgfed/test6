@@ -1112,9 +1112,9 @@ def normalize_text(text: str) -> str:
     # Убираем ВСЕ знаки препинания, включая Unicode апострофы и кавычки
     # ASCII: ' " `
     # Unicode: ' ' " " – — (типографские кавычки, апострофы, тире)
-    text = re.sub(r"[*?.!,;:'\"''""`()\\-]", "", text)
+    text = re.sub(r'[*?.!,;:\\'\\\"''""`()\\-]', '', text)
     # Убираем множественные пробелы
-    text = re.sub(r"\\s+", " ", text)
+    text = re.sub(r'\\s+', ' ', text)
     return text.strip().lower()
 
 
