@@ -1269,6 +1269,14 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
 
     # Цикл поиска и ответа на вопросы
     while answered_count < max_questions:
+        # КРИТИЧНО: Ждем появления хотя бы одного видимого heading элемента
+        try:
+            print(f"[DYNAMIC_QA] Ожидание появления heading элементов...")
+            page.wait_for_selector("role=heading", state="visible", timeout=10000)
+            time.sleep(1)  # Дополнительная пауза для стабильности
+        except Exception as e:
+            print(f"[DYNAMIC_QA] [WARN] Таймаут ожидания heading: {e}")
+
         # Найти все heading на странице
         try:
             headings = page.get_by_role("heading").all()
@@ -1278,10 +1286,23 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
             break
 
         found_new_question = False
+        visible_headings_count = 0
 
         # Проверить каждый heading
         for idx, heading in enumerate(headings):
             try:
+                # ПРОВЕРКА ВИДИМОСТИ: пропускаем невидимые элементы
+                is_visible = False
+                try:
+                    is_visible = heading.is_visible()
+                except:
+                    pass  # Если проверка failed - считаем невидимым
+
+                if not is_visible:
+                    continue  # Пропускаем невидимые headings
+
+                visible_headings_count += 1
+
                 # Получить текст вопроса с retry (элемент может быть не готов)
                 question_text = heading.inner_text().strip()
 
@@ -1294,8 +1315,8 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
                         pass  # Если снова не получилось - пропускаем
 
                 # DEBUG: показываем все heading что находим
-                if answered_count == 0 and idx < 3:  # Только первые 3 и только на первом проходе
-                    print(f"[DYNAMIC_QA] [DEBUG] Обрабатываю heading #{idx+1}: '{question_text}'")
+                if answered_count == 0 and visible_headings_count <= 5:  # Первые 5 видимых
+                    print(f"[DYNAMIC_QA] [DEBUG] Обрабатываю heading #{visible_headings_count} (visible): '{question_text}'")
 
                 # Пропустить если уже отвечали
                 if question_text in answered_questions:
@@ -1404,16 +1425,23 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
         # Если не нашли новых вопросов - выходим
         if not found_new_question:
             print(f"[DYNAMIC_QA] Новых вопросов не найдено, завершаю поиск")
+            print(f"[DYNAMIC_QA] Видимых headings на этой итерации: {visible_headings_count}")
 
             # DEBUG: показываем первые 5 heading что были на странице
             try:
                 headings = page.get_by_role("heading").all()
                 if len(headings) > 0:
-                    print(f"[DYNAMIC_QA] [DEBUG] Примеры heading на странице:")
-                    for i, h in enumerate(headings[:5]):
+                    print(f"[DYNAMIC_QA] [DEBUG] Примеры heading на странице (всего {len(headings)}):")
+                    shown = 0
+                    for i, h in enumerate(headings):
+                        if shown >= 5:
+                            break
                         try:
+                            is_vis = h.is_visible()
                             text = h.inner_text().strip()
-                            print(f"[DYNAMIC_QA]   {i+1}. '{text}'")
+                            visibility_mark = "[VISIBLE]" if is_vis else "[HIDDEN]"
+                            print(f"[DYNAMIC_QA]   {i+1}. {visibility_mark} '{text}'")
+                            shown += 1
                         except:
                             pass
             except:
