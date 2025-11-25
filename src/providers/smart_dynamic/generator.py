@@ -140,7 +140,7 @@ class Generator:
                         if '.fill(' in check_stripped or '.press_sequentially(' in check_stripped:
                             if any(pattern in check_stripped for pattern in phone_patterns):
                                 is_conditional_popup = True
-                                print(f"[PARSER] 🔍 Обнаружен условный popup после заполнения телефона")
+                                print(f"[PARSER] [DETECT] Обнаружен условный popup после заполнения телефона")
                                 break
 
                 # Проверяем следующую строку в with блоке на наличие .click()
@@ -809,7 +809,7 @@ def scroll_to_element(page, selector, by_role=None, name=None, by_test_id=None, 
     scroll_count = 0
     cycle = 0
 
-    # 2. ЦИКЛИЧЕСКИЙ ПОИСК: вниз → вверх → вниз → вверх...
+    # 2. ЦИКЛИЧЕСКИЙ ПОИСК: вниз -> вверх -> вниз -> вверх...
     while not is_time_expired():
         cycle += 1
         elapsed = time.time() - start_time
@@ -1026,7 +1026,7 @@ def write_row_status(results_file_path: str, row_number: int, status: str, start
         'data': json.dumps(data_row, ensure_ascii=False) if data_row else ""
     }
 
-    # 🌐 Добавляем извлеченные поля из Network responses
+    # [NETWORK] Добавляем извлеченные поля из Network responses
     if extracted_fields:
         for field_name, field_value in extracted_fields.items():
             # Добавляем колонку если ее еще нет
@@ -1436,7 +1436,7 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
         pre_code_clean = self._clean_code_section(pre_questions_code)
         post_code_clean = self._clean_code_section(post_questions_code)
 
-        # 🌐 Парсинг и генерация network capture кода
+        # [NETWORK] Парсинг и генерация network capture кода
         # ВСЕГДА генерируем базовый код для сохранения validate запросов
         network_capture_code = ""
         network_return_code = ""
@@ -1485,7 +1485,7 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
         # ВСЕГДА генерируем код сохранения (независимо от наличия паттернов)
         network_capture_code = f'''
         # ============================================================
-        # 🌐 ЗАХВАТ NETWORK RESPONSES (Developer Tools) + СОХРАНЕНИЕ VALIDATE В ФАЙЛЫ
+        # [NETWORK] ЗАХВАТ NETWORK RESPONSES (Developer Tools) + СОХРАНЕНИЕ VALIDATE В ФАЙЛЫ
         # ============================================================
         captured_data = {{}}
         extracted_fields = {{}}  # Словарь для извлеченных полей: {{field_name: value}}
@@ -1618,7 +1618,7 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
                                     'data': json_data
                                 }})
 
-                                # 🔥 ИЗВЛЕЧЕНИЕ КОНКРЕТНЫХ ПОЛЕЙ
+                                # ИЗВЛЕЧЕНИЕ КОНКРЕТНЫХ ПОЛЕЙ
                                 if fields:
                                     print(f"[NETWORK_CAPTURE] Извлекаю поля: {{fields}}", flush=True)
                                     for field in fields:
@@ -1643,7 +1643,7 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
         page.on("response", handle_response)
         print("[NETWORK_CAPTURE] Обработчик зарегистрирован для page", flush=True)
 
-        # 🔥 КРИТИЧНО: Регистрируем обработчик для ВСЕХ новых popup страниц
+        # КРИТИЧНО: Регистрируем обработчик для ВСЕХ новых popup страниц
         def handle_new_page(new_page):
             """Автоматически подключает обработчик к новым popup окнам (page1, page2, page3)"""
             print(f"[NETWORK_CAPTURE] [NEW_PAGE] Новая страница обнаружена, подключаю обработчик response", flush=True)
@@ -1656,7 +1656,7 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
 
         # Единый return code (всегда возвращаем extracted_fields, даже если они пустые)
         network_return_code = '''
-        # 🌐 Вывод захваченных данных (если есть)
+        # [NETWORK] Вывод захваченных данных (если есть)
         print(f"\\n[NETWORK_CAPTURE] === ИТОГОВЫЕ ДАННЫЕ ===")
         print(f"[NETWORK_CAPTURE] Обработано network responses: {{total_responses_counter}}", flush=True)
         print(f"[NETWORK_CAPTURE] Всего validate запросов записано: {{validate_counter}}", flush=True)
@@ -1886,7 +1886,7 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
                             result_lines.append(f'{indent_str}                    raise Exception("Кнопка не найдена")')
                         result_lines.append(f"")
                         result_lines.append(f"{indent_str}        {popup_var} = {popup_info_var}.value")
-                        result_lines.append(f"{indent_str}        print(f'[CONDITIONAL_POPUP] ✅ Popup успешно открыт с попытки {{attempt + 1}}', flush=True)")
+                        result_lines.append(f"{indent_str}        print(f'[CONDITIONAL_POPUP] [OK] Popup успешно открыт с попытки {{attempt + 1}}', flush=True)")
                         result_lines.append(f"{indent_str}        break")
                         result_lines.append(f"{indent_str}    except Exception as e:")
                         result_lines.append(f"{indent_str}        if attempt == 0:")
@@ -1897,7 +1897,7 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
                         result_lines.append(f"{indent_str}                pass")
                         result_lines.append(f"{indent_str}            continue")
                         result_lines.append(f"{indent_str}        else:")
-                        result_lines.append(f"{indent_str}            print(f'[CONDITIONAL_POPUP] ❌ КРИТИЧЕСКАЯ ОШИБКА: {{e}}', flush=True)")
+                        result_lines.append(f"{indent_str}            print(f'[CONDITIONAL_POPUP] [ERROR] КРИТИЧЕСКАЯ ОШИБКА: {{e}}', flush=True)")
                         result_lines.append(f'{indent_str}            raise Exception(f"Не удалось открыть popup после {{max_attempts}} попыток")')
                         result_lines.append(f"")
                         result_lines.append(f"{indent_str}if not {popup_var}:")
