@@ -124,6 +124,7 @@ class Generator:
         in_questions_section = False
         in_post_section = False
         page_context = 'page'  # Текущий контекст страницы (page, page1, page2, page3)
+        skip_boilerplate = True  # Пропускаем всё до первого реального действия
 
         for i, line in enumerate(lines):
             stripped = line.strip()
@@ -132,13 +133,27 @@ class Generator:
             if not stripped or stripped.startswith('import ') or stripped.startswith('from '):
                 continue
 
-            # Пропускаем boilerplate (без учета отступов)
-            if any(pattern in line for pattern in [
-                'def run(', 'with sync_playwright()', 'run(playwright)',
-                'browser = playwright.chromium', 'context = browser.new_context()',
-                'page = context.new_page()', '.close()'
-            ]):
-                continue
+            # 🔥 Улучшенное пропускание boilerplate
+            # Пропускаем всё до первого реального действия (page.goto, page.get_by_role, etc)
+            if skip_boilerplate:
+                # Список паттернов которые означают начало реального кода
+                real_code_patterns = [
+                    'page.goto(',
+                    'page.get_by_role(',
+                    'page.get_by_text(',
+                    'page.get_by_label(',
+                    'page.locator(',
+                    'page.fill(',
+                    'page.click(',
+                    '#pause'
+                ]
+
+                # Если это реальный код - перестаём пропускать
+                if any(pattern in stripped for pattern in real_code_patterns):
+                    skip_boilerplate = False
+                else:
+                    # Пропускаем эту строку (это boilerplate)
+                    continue
 
             # Отслеживание popup окон - переключаем в post_section
             if 'with page.expect_popup()' in stripped or '= page1_info.value' in stripped:
