@@ -2084,12 +2084,53 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
                     i += 1
                     continue
 
-                # #optional - следующее действие опциональное (может не быть на странице)
-                if special_cmd == '#optional':
-                    optional_next_action = True
-                    result_lines.append(f"{indent_str}# Optional element (may not be present)")
-                    i += 1
-                    continue
+                # #optional:N - группа из N действий (появляются вместе или не появляются)
+                # Синтаксис: #optional или #optional:N
+                # N - количество следующих действий для группировки (default: 1)
+                optional_match = re.match(r'#\s*optional(?::(\d+))?$', special_cmd)
+                if optional_match:
+                    group_size = int(optional_match.group(1)) if optional_match.group(1) else 1
+
+                    if group_size == 1:
+                        # Обычный optional - одно действие
+                        optional_next_action = True
+                        result_lines.append(f"{indent_str}# Optional element (may not be present)")
+                        i += 1
+                        continue
+                    else:
+                        # Optional группа - несколько действий в одном try-except
+                        result_lines.append(f"{indent_str}# Optional group: {group_size} actions (may not be present together)")
+                        result_lines.append(f"{indent_str}print('[OPTIONAL_GROUP] Trying optional group ({group_size} actions)...', flush=True)")
+                        result_lines.append(f"{indent_str}# Устанавливаем короткий timeout (3 сек) для optional группы")
+                        result_lines.append(f"{indent_str}{current_page_context}.set_default_timeout(3000)")
+                        result_lines.append(f"{indent_str}try:")
+
+                        # Собираем следующие N действий
+                        i += 1
+                        actions_collected = 0
+                        while i < len(lines) and actions_collected < group_size:
+                            action_line = lines[i]
+                            action_stripped = action_line.strip()
+
+                            # Пропускаем пустые строки и комментарии (кроме специальных команд)
+                            if not action_stripped or (action_stripped.startswith('#') and not action_stripped.startswith('#pause')):
+                                i += 1
+                                continue
+
+                            # Добавляем действие с отступом для try блока
+                            action_indent = ' ' * (current_indent + 4)
+                            result_lines.append(f"{action_indent}{action_stripped}")
+                            actions_collected += 1
+                            i += 1
+
+                        result_lines.append(f"{indent_str}    print('[OPTIONAL_GROUP] [OK] All actions completed', flush=True)")
+                        result_lines.append(f"{indent_str}except Exception as e:")
+                        result_lines.append(f"{indent_str}    print(f'[OPTIONAL_GROUP] [SKIP] Elements not found: {{type(e).__name__}} (this is OK)', flush=True)")
+                        result_lines.append(f"{indent_str}    pass")
+                        result_lines.append(f"{indent_str}finally:")
+                        result_lines.append(f"{indent_str}    # Восстанавливаем стандартный timeout (30 сек)")
+                        result_lines.append(f"{indent_str}    {current_page_context}.set_default_timeout(30000)")
+                        continue
 
                 # #retry - повторять попытки найти элемент с ожиданием между попытками
                 # Синтаксис: #retry или #retry:N или #retry:N:S или #retry:N:S:scroll_search
