@@ -47,6 +47,7 @@ class Generator:
         proxy_list_config = config.get('proxy_list', {})
         profile_config = config.get('profile', {})
         threads_count = config.get('threads_count', 1)
+        max_iterations = config.get('max_iterations', None)  # None = все строки CSV
         network_capture_patterns = config.get('network_capture_patterns', [])
 
         # Симуляция ввода текста
@@ -60,7 +61,7 @@ class Generator:
         questions_pool, pre_questions_code, post_questions_code = self._parse_user_code(user_code)
 
         script = self._generate_imports()
-        script += self._generate_config(api_token, proxy_config, proxy_list_config, threads_count)
+        script += self._generate_config(api_token, proxy_config, proxy_list_config, threads_count, max_iterations)
         script += self._generate_proxy_rotation()
         script += self._generate_octobrowser_functions(profile_config)
         script += self._generate_helpers()
@@ -385,7 +386,7 @@ from typing import Dict, List, Optional
 
 '''
 
-    def _generate_config(self, api_token: str, proxy_config: Dict, proxy_list_config: Dict, threads_count: int) -> str:
+    def _generate_config(self, api_token: str, proxy_config: Dict, proxy_list_config: Dict, threads_count: int, max_iterations: int = None) -> str:
         config = f'''# ============================================================
 # КОНФИГУРАЦИЯ
 # ============================================================
@@ -397,9 +398,12 @@ LOCAL_API_URL = "http://localhost:58888/api"
 
 '''
 
-        # Многопоточность
+        # Многопоточность и лимит итераций
         config += f'''# Многопоточность
 THREADS_COUNT = {threads_count}
+
+# Лимит итераций (None = обработать все строки CSV)
+MAX_ITERATIONS = {max_iterations if max_iterations is not None else 'None'}
 
 '''
 
@@ -2436,6 +2440,15 @@ def main():
     if not csv_data:
         print("[MAIN] Нет новых данных для обработки (все строки уже обработаны)")
         return
+
+    # 🎯 ПРИМЕНЯЕМ ЛИМИТ ИТЕРАЦИЙ
+    if MAX_ITERATIONS is not None and MAX_ITERATIONS > 0:
+        original_count = len(csv_data)
+        csv_data = csv_data[:MAX_ITERATIONS]
+        print(f"[MAIN] 🎯 Лимит итераций: {MAX_ITERATIONS}")
+        print(f"[MAIN] 🎯 Обрабатываем: {len(csv_data)} из {original_count} строк")
+    else:
+        print(f"[MAIN] 🎯 Лимит итераций: НЕТ (обрабатываем все строки)")
 
     # Формируем задачи с учетом results_file_path
     tasks = []

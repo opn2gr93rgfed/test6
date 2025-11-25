@@ -685,6 +685,31 @@ class ModernAppV3(ctk.CTk):
             text_color=self.theme['text_secondary']
         ).grid(row=4, column=2, padx=(5, 15), pady=10, sticky="w")
 
+        # 🎯 Max Iterations Limit
+        ctk.CTkLabel(
+            timeouts_frame,
+            text="Лимит итераций:",
+            font=(ModernTheme.FONT['family'], 11),
+            text_color=self.theme['text_primary']
+        ).grid(row=4, column=3, padx=(15, 5), pady=10, sticky="w")
+
+        self.max_iterations_var = tk.StringVar(value="")
+        max_iterations_entry = ctk.CTkEntry(
+            timeouts_frame,
+            textvariable=self.max_iterations_var,
+            placeholder_text="все",
+            width=60,
+            font=(ModernTheme.FONT['family'], 11)
+        )
+        max_iterations_entry.grid(row=4, column=4, padx=5, pady=10, sticky="ew")
+
+        ctk.CTkLabel(
+            timeouts_frame,
+            text="(пусто = все строки CSV)",
+            font=(ModernTheme.FONT['family'], 9),
+            text_color=self.theme['text_secondary']
+        ).grid(row=4, column=5, padx=(5, 15), pady=10, sticky="w")
+
         # 🌐 Network Capture Patterns
         ctk.CTkLabel(
             timeouts_frame,
@@ -1130,6 +1155,8 @@ class ModernAppV3(ctk.CTk):
                 'action_delay': float(self.action_delay_var.get()) if self.action_delay_var.get().replace('.', '', 1).isdigit() else 0.5,
                 # 🔥 МНОГОПОТОЧНОСТЬ
                 'threads_count': int(self.threads_count_var.get()) if self.threads_count_var.get().isdigit() else 1,
+                # 🎯 ЛИМИТ ИТЕРАЦИЙ (None = все строки CSV)
+                'max_iterations': int(self.max_iterations_var.get()) if self.max_iterations_var.get().strip() and self.max_iterations_var.get().isdigit() else None,
                 # 🌐 NETWORK CAPTURE - парсинг нового формата pattern:field1,field2
                 'network_capture_patterns': self._parse_network_patterns(self.network_patterns_var.get())
             }
