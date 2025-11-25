@@ -627,10 +627,51 @@ def rotate_proxy_for_port(port: int) -> bool:
             print(f"[9PROXY] [DEBUG] Full response: {data}")
             return False
 
-        proxy = data['data'][0]
-        proxy_id = proxy.get('id')
-        proxy_ip = proxy.get('ip', 'unknown')
-        proxy_country = proxy.get('country_code', 'unknown')
+        # 🔥 9Proxy API может возвращать либо строки '127.0.0.1:6000' либо объекты
+        proxy_data = data['data'][0]
+
+        # Проверяем тип данных
+        if isinstance(proxy_data, str):
+            # Строка формата '127.0.0.1:6000' - нужно получить реальный ID прокси
+            print(f"[9PROXY] [DEBUG] API вернул строку: {proxy_data}")
+            print(f"[9PROXY] [WARNING] Для ротации нужен ID прокси, пробую /api/today_list...")
+
+            # Получаем список прокси с ID через /api/today_list
+            try:
+                list_response = requests.get(
+                    f"{NINE_PROXY_API_URL}/api/today_list",
+                    params=params,
+                    timeout=5
+                )
+
+                if list_response.status_code == 200:
+                    list_data = list_response.json()
+                    print(f"[9PROXY] [DEBUG] today_list response: {list_data}")
+
+                    if list_data.get('data') and len(list_data['data']) > 0:
+                        proxy = list_data['data'][0]
+                        if isinstance(proxy, dict):
+                            proxy_id = proxy.get('id')
+                            proxy_ip = proxy.get('ip', 'unknown')
+                            proxy_country = proxy.get('country_code', 'unknown')
+                        else:
+                            print(f"[9PROXY] [ERROR] today_list тоже вернул строку вместо объекта")
+                            return False
+                    else:
+                        print(f"[9PROXY] [ERROR] today_list не вернул данных")
+                        return False
+                else:
+                    print(f"[9PROXY] [ERROR] today_list HTTP {list_response.status_code}")
+                    return False
+            except Exception as e:
+                print(f"[9PROXY] [ERROR] Ошибка при запросе today_list: {e}")
+                return False
+        else:
+            # Объект с полями id, ip, country_code
+            proxy = proxy_data
+            proxy_id = proxy.get('id')
+            proxy_ip = proxy.get('ip', 'unknown')
+            proxy_country = proxy.get('country_code', 'unknown')
 
         if not proxy_id:
             print(f"[9PROXY] [ERROR] Прокси не имеет ID")
