@@ -1395,7 +1395,8 @@ def normalize_text(text: str) -> str:
     # Убираем ВСЕ знаки препинания, включая Unicode апострофы и кавычки
     # ASCII: ' " `
     # Unicode: ' ' " " – — (типографские кавычки, апострофы, тире)
-    text = re.sub(r'[*?.!,;:\\'\\\"''""`()\\-]', '', text)
+    # Дефис в конце класса символов, чтобы избежать SyntaxWarning
+    text = re.sub(r'[*?.!,;:\\'\\\"''""`()-]', '', text)
     # Убираем множественные пробелы
     text = re.sub(r'\\s+', ' ', text)
     return text.strip().lower()
@@ -2835,7 +2836,7 @@ def main():
     if NINE_PROXY_ENABLED and NINE_PROXY_PORTS:
         print("\\n" + "="*60)
         if not initialize_nine_proxy_ports():
-            print("[MAIN] ⚠️ Не удалось инициализировать 9Proxy, продолжаем без него...")
+            print("[MAIN] [WARNING] Не удалось инициализировать 9Proxy, продолжаем без него...")
             # Не прерываем выполнение, просто прокси не будут работать
         print("="*60 + "\\n")
 
