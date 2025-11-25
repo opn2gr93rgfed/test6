@@ -172,14 +172,53 @@ class NineProxyManager:
             if not isinstance(proxies, list):
                 return False, f"API вернул неправильный тип данных: {type(proxies)}", []
 
-            # Проверить первый элемент
+            # Проверить первый элемент и конвертировать строки в словари
             if proxies and not isinstance(proxies[0], dict):
                 print(f"[9PROXY WARNING] API вернул не словари! Первый элемент: {type(proxies[0])}")
-                # Попробуем конвертировать если это строки
+                print(f"[9PROXY WARNING] Примеры данных: {proxies[:3]}")
+
+                # Конвертируем строки в словари
                 if isinstance(proxies[0], str):
-                    # Возможно это список строк вида "ip:port"
-                    print(f"[9PROXY] Попытка парсинга строк...")
-                    return False, "API вернул строки вместо объектов прокси", []
+                    print(f"[9PROXY] 🔧 Парсинг строк в объекты прокси...")
+                    parsed_proxies = []
+
+                    for idx, proxy_str in enumerate(proxies):
+                        try:
+                            # Парсим строку вида "ip:port" или "ip"
+                            parts = proxy_str.strip().split(':')
+
+                            if len(parts) >= 2:
+                                ip = parts[0]
+                                port = int(parts[1])
+                            else:
+                                ip = parts[0]
+                                port = 8080  # Порт по умолчанию
+
+                            # Создаем словарь прокси
+                            proxy_dict = {
+                                'id': f"{ip}_{port}_{idx}",  # Генерируем ID
+                                'ip': ip,
+                                'port': port,
+                                'country_code': 'Unknown',
+                                'is_online': True,  # Предполагаем что онлайн
+                                'city': None,
+                                'state': None,
+                                'isp': None
+                            }
+                            parsed_proxies.append(proxy_dict)
+                            print(f"[9PROXY]   ✅ {idx+1}. {ip}:{port}")
+
+                        except Exception as e:
+                            print(f"[9PROXY]   ❌ Не удалось распарсить '{proxy_str}': {e}")
+                            continue
+
+                    if not parsed_proxies:
+                        return False, "Не удалось распарсить прокси из строк", []
+
+                    print(f"[9PROXY] ✅ Распарсено {len(parsed_proxies)} прокси из строк")
+                    proxies = parsed_proxies
+                else:
+                    return False, f"API вернул неподдерживаемый тип: {type(proxies[0])}", []
 
             # Обновить пул
             self.proxy_pool = proxies
@@ -503,11 +542,19 @@ class NineProxyManager:
         if not proxy_id:
             return False, "Прокси не имеет ID"
 
+        # 🔥 Если ID выглядит как сгенерированный (содержит "_"), используем IP
+        # Возможно, API ожидает IP вместо ID когда возвращает строки
+        if isinstance(proxy_id, str) and '_' in proxy_id:
+            print(f"[9PROXY DEBUG] Обнаружен сгенерированный ID: {proxy_id}, используем IP")
+            proxy_id = proxy.get('ip', proxy_id)
+
         success, message, data = self.forward_to_proxy(proxy_id, port, plan)
 
         if success:
             self.port_proxy_map[port] = proxy
             print(f"[9PROXY] ✅ Порт {port} назначен: {proxy.get('ip')} ({proxy.get('country_code')})")
+        else:
+            print(f"[9PROXY] ❌ Порт {port} ошибка: {message}")
 
         return success, message
 
