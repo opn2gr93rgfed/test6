@@ -117,37 +117,20 @@ class Generator:
                 in_post_section = True
                 in_questions_section = False
 
-                # ДЕТЕКЦИЯ УСЛОВНОГО POPUP ПОСЛЕ ЗАПОЛНЕНИЯ ТЕЛЕФОНА
-                # Проверяем, был ли телефон заполнен в последних 5 строках перед popup
-                is_conditional_popup = False
-                if 'with page.expect_popup()' in stripped:
-                    # Проверяем последние действия в pre_questions_lines и current_actions
-                    lines_to_check = []
-                    if current_actions:
-                        lines_to_check.extend(current_actions[-5:])  # Последние 5 действий текущего вопроса
-                    if pre_questions_lines:
-                        lines_to_check.extend([l.strip() for l in pre_questions_lines[-5:]])  # Последние 5 строк до вопросов
-
-                    # Ищем паттерн заполнения телефона
-                    phone_patterns = [
-                        r'\.fill\([^)]*(?:phone|Phone|PHONE|телефон|Телефон)',  # .fill() с телефоном в аргументе
-                        r'get_by_.*(?:phone|Phone|PHONE|телефон|Телефон).*\.fill\(',  # селектор с телефоном
-                        r'get_by_role\(["\']textbox["\'].*name=["\'][^"\']*(?:phone|Phone|number)[^"\']*["\']\).*\.fill\(',  # Phone number textbox
-                    ]
-
-                    for check_line in lines_to_check:
-                        for pattern in phone_patterns:
-                            if re.search(pattern, check_line, re.IGNORECASE):
-                                is_conditional_popup = True
-                                print(f"[PARSER] DEBUG: Обнаружен условный popup после заполнения телефона!")
-                                print(f"[PARSER] DEBUG: Триггерная строка: {check_line[:100]}")
-                                break
-                        if is_conditional_popup:
-                            break
-
-                # Если обнаружен условный popup, добавляем специальный маркер
-                if is_conditional_popup:
-                    post_questions_lines.append(' ' * (len(line) - len(line.lstrip())) + '#auto_conditional_popup')
+                # ОТКЛЮЧЕНА АВТО-ДЕТЕКЦИЯ УСЛОВНОГО POPUP
+                # ПРИЧИНА: Слишком агрессивная - помечает ВСЕ popup после заполнения телефона
+                # Это ломает обычный page1, который не является условным
+                #
+                # РЕШЕНИЕ: Пользователь должен явно ставить #auto_conditional_popup
+                # перед нужным with блоком где действительно условный popup
+                # Это дает точный контроль и предотвращает ложные срабатывания
+                #
+                # ПРИМЕР ИСПОЛЬЗОВАНИЯ:
+                # page.fill("input[name='phone']", row["Phone"])
+                # #auto_conditional_popup  ← явный маркер для условного popup
+                # with page.expect_popup() as page2_info:
+                #     page.click("button")
+                # page2 = page2_info.value
 
                 # Проверяем следующую строку в with блоке на наличие .click()
                 # Если последнее действие текущего вопроса - клик по той же кнопке,
