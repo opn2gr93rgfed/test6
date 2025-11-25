@@ -422,13 +422,30 @@ class ProxyTab(ctk.CTkFrame):
         )
         country_combo.grid(row=0, column=1, padx=5, pady=8, sticky="ew")
 
+        # State
+        ctk.CTkLabel(
+            filters_frame,
+            text="State:",
+            font=('Segoe UI', 10),
+            text_color=self.theme['text_primary']
+        ).grid(row=0, column=2, padx=(10, 5), pady=8, sticky="w")
+
+        self.nine_proxy_state_entry = ctk.CTkEntry(
+            filters_frame,
+            width=150,
+            height=32,
+            font=('Segoe UI', 10),
+            placeholder_text="New York,Florida"
+        )
+        self.nine_proxy_state_entry.grid(row=0, column=3, padx=5, pady=8, sticky="ew")
+
         # City
         ctk.CTkLabel(
             filters_frame,
             text="City:",
             font=('Segoe UI', 10),
             text_color=self.theme['text_primary']
-        ).grid(row=0, column=2, padx=(10, 5), pady=8, sticky="w")
+        ).grid(row=0, column=4, padx=(10, 5), pady=8, sticky="w")
 
         self.nine_proxy_city_entry = ctk.CTkEntry(
             filters_frame,
@@ -437,15 +454,15 @@ class ProxyTab(ctk.CTkFrame):
             font=('Segoe UI', 10),
             placeholder_text="Optional"
         )
-        self.nine_proxy_city_entry.grid(row=0, column=3, padx=5, pady=8, sticky="ew")
+        self.nine_proxy_city_entry.grid(row=0, column=5, padx=5, pady=8, sticky="ew")
 
-        # ISP
+        # ISP (moved to row 1)
         ctk.CTkLabel(
             filters_frame,
             text="ISP:",
             font=('Segoe UI', 10),
             text_color=self.theme['text_primary']
-        ).grid(row=0, column=4, padx=(10, 5), pady=8, sticky="w")
+        ).grid(row=1, column=4, padx=(10, 5), pady=8, sticky="w")
 
         self.nine_proxy_isp_entry = ctk.CTkEntry(
             filters_frame,
@@ -454,7 +471,7 @@ class ProxyTab(ctk.CTkFrame):
             font=('Segoe UI', 10),
             placeholder_text="Optional"
         )
-        self.nine_proxy_isp_entry.grid(row=0, column=5, padx=(5, 15), pady=8, sticky="ew")
+        self.nine_proxy_isp_entry.grid(row=1, column=5, padx=(5, 15), pady=8, sticky="ew")
 
         # Plan Type & Number
         ctk.CTkLabel(
@@ -686,6 +703,7 @@ class ProxyTab(ctk.CTkFrame):
 
         # Собрать параметры фильтров
         country = self.nine_proxy_country_var.get().strip() if self.nine_proxy_country_var.get() else None
+        state = self.nine_proxy_state_entry.get().strip() if self.nine_proxy_state_entry.get() else None
         city = self.nine_proxy_city_entry.get().strip() if self.nine_proxy_city_entry.get() else None
         isp = self.nine_proxy_isp_entry.get().strip() if self.nine_proxy_isp_entry.get() else None
         plan = self.nine_proxy_plan_var.get() if self.nine_proxy_plan_var.get() != "all" else None
@@ -698,6 +716,7 @@ class ProxyTab(ctk.CTkFrame):
         def fetch_thread():
             success, message, proxies = self.nine_proxy_manager.fetch_proxies(
                 country=country,
+                state=state,
                 city=city,
                 isp=isp,
                 plan=plan,
@@ -768,6 +787,7 @@ class ProxyTab(ctk.CTkFrame):
             'api_url': self.nine_proxy_url_entry.get().strip(),
             'filters': {
                 'country': self.nine_proxy_country_var.get(),
+                'state': self.nine_proxy_state_entry.get().strip(),
                 'city': self.nine_proxy_city_entry.get().strip(),
                 'isp': self.nine_proxy_isp_entry.get().strip(),
                 'plan': self.nine_proxy_plan_var.get(),
@@ -809,6 +829,8 @@ class ProxyTab(ctk.CTkFrame):
         filters = nine_proxy_config.get('filters', {})
         if filters.get('country'):
             self.nine_proxy_country_var.set(filters['country'])
+        if filters.get('state'):
+            self.nine_proxy_state_entry.insert(0, filters['state'])
         if filters.get('city'):
             self.nine_proxy_city_entry.insert(0, filters['city'])
         if filters.get('isp'):

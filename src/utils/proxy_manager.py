@@ -18,7 +18,6 @@ API Endpoints:
 
 import requests
 import random
-import time
 from typing import List, Dict, Optional, Literal
 from datetime import datetime
 
@@ -63,7 +62,7 @@ class NineProxyManager:
         try:
             response = requests.get(
                 f"{self.api_base_url}/api/proxy",
-                params={'num': 1, 't': int(time.time())},
+                params={'num': 1, 't': 2},
                 timeout=5
             )
 
@@ -114,7 +113,7 @@ class NineProxyManager:
 
             # Параметры запроса
             params = {
-                't': int(time.time())  # Timestamp для обхода кеша
+                't': 2  # API требует 1 или 2 (тип прокси)
             }
 
             # Добавить фильтры
@@ -186,7 +185,7 @@ class NineProxyManager:
                 'id': proxy_id,
                 'port': port,
                 'plan': plan,
-                't': int(time.time())
+                't': 2
             }
 
             response = requests.get(
@@ -298,7 +297,7 @@ class NineProxyManager:
         try:
             response = requests.get(
                 f"{self.api_base_url}/api/port_status",
-                params={'t': int(time.time())},
+                params={'t': 2},
                 timeout=10
             )
 
@@ -333,7 +332,7 @@ class NineProxyManager:
                 params={
                     'start': start,
                     'num': count,
-                    't': int(time.time())
+                    't': 2
                 },
                 timeout=10
             )
