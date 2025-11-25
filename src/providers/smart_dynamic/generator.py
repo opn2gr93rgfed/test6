@@ -47,6 +47,7 @@ class Generator:
         proxy_list_config = config.get('proxy_list', {})
         profile_config = config.get('profile', {})
         threads_count = config.get('threads_count', 1)
+        max_iterations = config.get('max_iterations', None)  # None = все строки CSV
         network_capture_patterns = config.get('network_capture_patterns', [])
 
         # Симуляция ввода текста
@@ -60,7 +61,7 @@ class Generator:
         questions_pool, pre_questions_code, post_questions_code = self._parse_user_code(user_code)
 
         script = self._generate_imports()
-        script += self._generate_config(api_token, proxy_config, proxy_list_config, threads_count)
+        script += self._generate_config(api_token, proxy_config, proxy_list_config, threads_count, max_iterations)
         script += self._generate_proxy_rotation()
         script += self._generate_octobrowser_functions(profile_config)
         script += self._generate_helpers()
@@ -115,6 +116,17 @@ class Generator:
             if 'with page.expect_popup()' in stripped or '= page1_info.value' in stripped:
                 in_post_section = True
                 in_questions_section = False
+
+                # КРИТИЧНО: Проверяем предыдущую строку на наличие #auto_conditional_popup
+                # Если она была добавлена в current_actions - удаляем оттуда и добавляем в post
+                if current_question and current_actions:
+                    last_action = current_actions[-1].strip() if current_actions else ""
+                    if last_action.startswith('#auto_conditional_popup'):
+                        # Удаляем маркер из действий вопроса
+                        current_actions = current_actions[:-1]
+                        print(f"[PARSER] DEBUG: Перемещаю #auto_conditional_popup из вопроса '{current_question}' в post_questions_lines")
+                        # Добавляем маркер в post_questions (он будет обработан дальше)
+                        post_questions_lines.append(last_action)
 
                 # Проверяем следующую строку в with блоке на наличие .click()
                 # Если последнее действие текущего вопроса - клик по той же кнопке,
@@ -353,7 +365,7 @@ from typing import Dict, List, Optional
 
 '''
 
-    def _generate_config(self, api_token: str, proxy_config: Dict, proxy_list_config: Dict, threads_count: int) -> str:
+    def _generate_config(self, api_token: str, proxy_config: Dict, proxy_list_config: Dict, threads_count: int, max_iterations: int = None) -> str:
         config = f'''# ============================================================
 # КОНФИГУРАЦИЯ
 # ============================================================
@@ -365,9 +377,15 @@ LOCAL_API_URL = "http://localhost:58888/api"
 
 '''
 
-        # Многопоточность
+        # Многопоточность и лимит итераций
         config += f'''# Многопоточность
 THREADS_COUNT = {threads_count}
+
+# Лимит итераций (None = обработать все строки CSV)
+MAX_ITERATIONS = {max_iterations if max_iterations is not None else 'None'}
+
+# Lock для синхронизации записи в CSV файл (защита от race condition)
+csv_write_lock = threading.Lock()
 
 '''
 
@@ -912,119 +930,71 @@ def execute_special_command(command: str, page, data_row: Dict):
 # ЗАГРУЗКА CSV И ОТСЛЕЖИВАНИЕ ПРОГРЕССА
 # ============================================================
 
-def load_processed_rows(results_file_path: str) -> set:
+def mark_row_in_progress(csv_file_path: str, row_index: int, fieldnames: list):
     """
-    Читает файл результатов и возвращает set номеров уже обработанных строк
+    Помечает строку как взятую в работу - ставит звездочку (*) в колонку с индексом 1
+
+    ПОТОКОБЕЗОПАСНО: использует csv_write_lock для синхронизации
 
     Args:
-        results_file_path: Путь к файлу результатов
-
-    Returns:
-        Set номеров строк, которые уже были обработаны (любой статус)
+        csv_file_path: Путь к CSV файлу
+        row_index: Индекс строки в CSV (0-based, не считая заголовок)
+        fieldnames: Список имен полей (заголовков)
     """
-    processed_rows = set()
-
-    if not os.path.exists(results_file_path):
-        print(f"[RESULTS] Файл результатов не найден (это нормально для первого запуска): {results_file_path}")
-        return processed_rows
-
-    try:
-        with open(results_file_path, 'r', encoding='utf-8') as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                if 'row_number' in row:
-                    processed_rows.add(int(row['row_number']))
-
-        print(f"[RESULTS] Загружено {len(processed_rows)} обработанных строк из результатов")
-    except Exception as e:
-        print(f"[RESULTS] [WARNING] Ошибка чтения результатов: {e}")
-
-    return processed_rows
-
-
-def write_row_status(results_file_path: str, row_number: int, status: str, start_time: str, end_time: str = "", error_msg: str = "", data_row: Dict = None, extracted_fields: Dict = None):
-    """
-    Записывает или обновляет статус обработки строки в файл результатов
-
-    Args:
-        results_file_path: Путь к файлу результатов
-        row_number: Номер строки в исходном CSV (1-based)
-        status: Статус - "processing", "success", "failed", "error"
-        start_time: Время начала обработки (ISO format)
-        end_time: Время завершения (пусто для "processing")
-        error_msg: Сообщение об ошибке (для failed/error)
-        data_row: Данные строки из CSV (для reference)
-        extracted_fields: Извлеченные поля из Network responses (словарь field_name: value)
-    """
-    import datetime
-
-    # Проверяем существует ли файл
-    file_exists = os.path.exists(results_file_path)
-
-    # Если файл существует, читаем его и ищем строку
-    existing_rows = {}
-    base_fieldnames = ['row_number', 'status', 'start_time', 'end_time', 'error_msg', 'data']
-
-    if file_exists:
+    # КРИТИЧНО: блокируем доступ к файлу для избежания race condition
+    with csv_write_lock:
         try:
-            with open(results_file_path, 'r', encoding='utf-8') as f:
+            # Читаем весь CSV
+            all_rows = []
+            actual_fieldnames = []
+
+            with open(csv_file_path, 'r', encoding='utf-8', newline='') as f:
                 reader = csv.DictReader(f)
-                fieldnames = list(reader.fieldnames) if reader.fieldnames else base_fieldnames
-                for row in reader:
-                    if 'row_number' in row:
-                        existing_rows[int(row['row_number'])] = row
+                actual_fieldnames = list(reader.fieldnames) if reader.fieldnames else fieldnames
+                all_rows = list(reader)
+
+            # Проверяем что файл не пустой
+            if not all_rows:
+                print(f"[MARK] [ERROR] CSV файл пустой!")
+                return
+
+            # Проверяем что индекс валидный
+            if row_index < 0 or row_index >= len(all_rows):
+                print(f"[MARK] [ERROR] Неверный индекс строки: {row_index} (всего строк: {len(all_rows)})")
+                return
+
+            # Получаем имя второго поля (индекс 1)
+            if len(actual_fieldnames) < 2:
+                print(f"[MARK] [ERROR] CSV должен иметь минимум 2 колонки")
+                return
+
+            second_field_name = actual_fieldnames[1]
+
+            # Ставим звездочку в колонке с индексом 1
+            all_rows[row_index][second_field_name] = "*"
+
+            # Перезаписываем файл
+            with open(csv_file_path, 'w', encoding='utf-8', newline='') as f:
+                writer = csv.DictWriter(f, fieldnames=actual_fieldnames)
+                writer.writeheader()
+                writer.writerows(all_rows)
+
+            print(f"[MARK] [OK] Строка {row_index + 1} помечена как взятая в работу (*)")
+
         except Exception as e:
-            print(f"[RESULTS] [WARNING] Ошибка чтения результатов для обновления: {e}")
-            existing_rows = {}
-            fieldnames = base_fieldnames
-    else:
-        fieldnames = base_fieldnames
-
-    # Создаем или обновляем запись
-    row_data = {
-        'row_number': row_number,
-        'status': status,
-        'start_time': start_time,
-        'end_time': end_time,
-        'error_msg': error_msg,
-        'data': json.dumps(data_row, ensure_ascii=False) if data_row else ""
-    }
-
-    # 🌐 Добавляем извлеченные поля из Network responses
-    if extracted_fields:
-        for field_name, field_value in extracted_fields.items():
-            # Добавляем колонку если ее еще нет
-            if field_name not in fieldnames:
-                fieldnames.append(field_name)
-                print(f"[RESULTS] [NETWORK] Добавлена новая колонка: {field_name}", flush=True)
-
-            # Записываем значение
-            row_data[field_name] = str(field_value)
-            print(f"[RESULTS] [NETWORK] Строка {row_number}: {field_name} = {field_value}", flush=True)
-
-    existing_rows[row_number] = row_data
-
-    # Перезаписываем весь файл
-    try:
-        with open(results_file_path, 'w', encoding='utf-8', newline='') as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
-            writer.writeheader()
-
-            # Сортируем по номеру строки
-            for rn in sorted(existing_rows.keys()):
-                writer.writerow(existing_rows[rn])
-
-        # print(f"[RESULTS] Записан статус для строки {row_number}: {status}")
-    except Exception as e:
-        print(f"[RESULTS] [ERROR] Не удалось записать результат: {e}")
+            print(f"[MARK] [ERROR] Не удалось пометить строку: {e}")
+            import traceback
+            traceback.print_exc()
 
 
 def load_csv_data() -> tuple:
     """
     Загрузить данные из CSV файла через диалог и отфильтровать уже обработанные
 
+    Обработанные строки определяются по наличию звездочки (*) в колонке с индексом 1
+
     Returns:
-        Tuple (csv_file_path, results_file_path, unprocessed_data)
+        Tuple (csv_file_path, fieldnames, unprocessed_data)
     """
     print("[CSV] Выберите CSV файл с данными...")
 
@@ -1042,58 +1012,61 @@ def load_csv_data() -> tuple:
 
     if not csv_file_path:
         print("[CSV] [ERROR] Файл не выбран")
-        return ("", "", [])
+        return ("", [], [])
 
     if not os.path.exists(csv_file_path):
         print(f"[CSV] [ERROR] Файл не существует: {csv_file_path}")
-        return ("", "", [])
+        return ("", [], [])
 
     print(f"[CSV] Загрузка файла: {csv_file_path}")
 
-    # Создаем путь к файлу результатов
-    csv_dir = os.path.dirname(csv_file_path)
-    csv_basename = os.path.splitext(os.path.basename(csv_file_path))[0]
-    results_file_path = os.path.join(csv_dir, f"{csv_basename}_results.csv")
-
-    print(f"[CSV] Файл результатов: {results_file_path}")
-
-    # Загружаем обработанные строки
-    processed_rows = load_processed_rows(results_file_path)
-
     # Загружаем CSV данные
     all_data = []
+    fieldnames = []
+
     try:
         with open(csv_file_path, 'r', encoding='utf-8') as f:
             reader = csv.DictReader(f)
+            fieldnames = list(reader.fieldnames) if reader.fieldnames else []
             all_data = list(reader)
 
         print(f"[CSV] [OK] Загружено {len(all_data)} строк из CSV")
+        print(f"[CSV] Заголовки: {', '.join(fieldnames)}")
 
-        if all_data and len(all_data) > 0:
-            headers = list(all_data[0].keys())
-            print(f"[CSV] Заголовки: {', '.join(headers)}")
+        # Проверяем что есть минимум 2 колонки
+        if len(fieldnames) < 2:
+            print(f"[CSV] [ERROR] CSV должен иметь минимум 2 колонки")
+            return ("", [], [])
 
     except Exception as e:
         print(f"[CSV] [ERROR] Ошибка загрузки: {e}")
-        return ("", "", [])
+        return ("", [], [])
 
-    # Фильтруем уже обработанные строки
+    # Имя второй колонки (индекс 1) - здесь проверяем звездочку
+    second_field_name = fieldnames[1]
+    print(f"[CSV] Колонка маркера обработки: '{second_field_name}' (индекс 1)")
+
+    # Фильтруем строки со звездочкой в колонке индекс 1
     unprocessed_data = []
-    for row_idx, data_row in enumerate(all_data, 1):
-        # Добавляем номер строки в данные
-        data_row['__row_number__'] = row_idx
+    processed_count = 0
 
-        # Пропускаем уже обработанные
-        if row_idx in processed_rows:
-            continue
+    for csv_row_idx, data_row in enumerate(all_data):
+        # Сохраняем индекс строки в CSV (0-based, не считая заголовок)
+        data_row['__csv_row_index__'] = csv_row_idx
+
+        # Проверяем есть ли звездочка в колонке с индексом 1
+        marker_value = data_row.get(second_field_name, "").strip()
+
+        if marker_value == "*":
+            processed_count += 1
+            continue  # Пропускаем строки со звездочкой
 
         unprocessed_data.append(data_row)
 
-    skipped_count = len(all_data) - len(unprocessed_data)
-    print(f"[CSV] Пропущено {skipped_count} обработанных строк")
+    print(f"[CSV] Пропущено строк со звездочкой (*): {processed_count}")
     print(f"[CSV] К обработке: {len(unprocessed_data)} новых строк")
 
-    return (csv_file_path, results_file_path, unprocessed_data)
+    return (csv_file_path, fieldnames, unprocessed_data)
 
 
 '''
@@ -1132,11 +1105,14 @@ QUESTIONS_POOL = {pool_json}
 def normalize_text(text: str) -> str:
     """Нормализует текст для сравнения - убирает спецсимволы, лишние пробелы"""
     import re
-    # Убираем звездочки, точки, восклицательные знаки в конце
-    text = re.sub(r'[*?.!]+\s*$', '', text)
+    # Убираем ВСЕ знаки препинания, включая Unicode апострофы и кавычки
+    # ASCII: ' " `
+    # Unicode: ' ' " " – — (типографские кавычки, апострофы, тире)
+    text = re.sub(r'[*?.!,;:\\'\\\"''""`()\\-]', '', text)
     # Убираем множественные пробелы
-    text = re.sub(r'\s+', ' ', text)
+    text = re.sub(r'\\s+', ' ', text)
     return text.strip().lower()
+
 
 
 def find_question_in_pool(question_text: str, pool: Dict, debug: bool = False) -> Optional[str]:
@@ -1161,6 +1137,10 @@ def find_question_in_pool(question_text: str, pool: Dict, debug: bool = False) -
     if debug:
         print(f"[SEARCH] Ищу вопрос: '{question_text}'")
         print(f"[SEARCH] Нормализован: '{normalized_question}'")
+        print(f"[SEARCH] Длина нормализованного: {len(normalized_question)}")
+
+    best_match = None
+    best_ratio = 0
 
     for pool_key in pool.keys():
         normalized_key = normalize_text(pool_key)
@@ -1168,25 +1148,75 @@ def find_question_in_pool(question_text: str, pool: Dict, debug: bool = False) -
         # Точное совпадение нормализованных
         if normalized_question == normalized_key:
             if debug:
-                print(f"[SEARCH] [OK] НАЙДЕНО (нормализованное): '{pool_key}'")
+                print(f"[SEARCH] [OK] НАЙДЕНО (точное совпадение): '{pool_key}'")
             return pool_key
 
         # Частичное совпадение - pool_key содержится в question_text или наоборот
         if normalized_key in normalized_question or normalized_question in normalized_key:
-            # Проверяем что это действительно похожие вопросы (>55% совпадение длины)
+            # Проверяем что это действительно похожие вопросы (>45% совпадение длины)
             len_ratio = min(len(normalized_key), len(normalized_question)) / max(len(normalized_key), len(normalized_question))
-            if len_ratio > 0.55:
-                if debug:
-                    print(f"[SEARCH] [OK] НАЙДЕНО (частичное, ratio={len_ratio:.2f}): '{pool_key}'")
-                return pool_key
+
+            if debug:
+                print(f"[SEARCH] Проверка '{pool_key[:60]}...': ratio={len_ratio:.2f}")
+
+            if len_ratio > 0.45:  # Снижен порог с 0.50 до 0.45
+                if len_ratio > best_ratio:
+                    best_match = pool_key
+                    best_ratio = len_ratio
+
+    if best_match:
+        if debug:
+            print(f"[SEARCH] [OK] НАЙДЕНО (частичное, ratio={best_ratio:.2f}): '{best_match}'")
+        return best_match
+
+    # ЖЕСТКОЕ РЕШЕНИЕ: Fallback поиск по ключевым словам (если fuzzy matching не сработал)
+    if debug:
+        print(f"[SEARCH] Fuzzy matching не нашел, пробую поиск по ключевым словам...")
+
+    # Извлекаем ключевые слова (слова длиной > 3 символов)
+    question_words = set([w for w in normalized_question.split() if len(w) > 3])
+
+    if debug:
+        print(f"[SEARCH] Ключевые слова в вопросе: {question_words}")
+
+    best_keyword_match = None
+    best_keyword_score = 0
+
+    for pool_key in pool.keys():
+        normalized_key = normalize_text(pool_key)
+        key_words = set([w for w in normalized_key.split() if len(w) > 3])
+
+        # Считаем процент совпадающих ключевых слов
+        if question_words and key_words:
+            common_words = question_words & key_words  # Пересечение
+            keyword_score = len(common_words) / len(question_words)  # Процент от вопроса
+
+            if debug and keyword_score > 0.3:
+                print(f"[SEARCH] Проверка '{pool_key[:60]}...': keyword_score={keyword_score:.2f}, common={common_words}")
+
+            # Если совпадает 40%+ ключевых слов - это кандидат
+            if keyword_score > 0.40:
+                if keyword_score > best_keyword_score:
+                    best_keyword_match = pool_key
+                    best_keyword_score = keyword_score
+
+    if best_keyword_match:
+        if debug:
+            print(f"[SEARCH] [OK] НАЙДЕНО (по ключевым словам, score={best_keyword_score:.2f}): '{best_keyword_match}'")
+        return best_keyword_match
 
     if debug:
         print(f"[SEARCH] [FAIL] НЕ НАЙДЕНО")
         print(f"[SEARCH] Доступные ключи в пуле (всего {len(pool)}):")
-        # Показываем ВСЕ вопросы, чтобы увидеть что в пуле
+        # Показываем ВСЕ вопросы с их нормализованной версией И len_ratio
         for i, key in enumerate(list(pool.keys()), 1):
             normalized = normalize_text(key)
-            print(f"[SEARCH]   {i}. '{key}' -> '{normalized}'")
+            # Считаем ratio для диагностики
+            if normalized_key in normalized_question or normalized_question in normalized:
+                ratio = min(len(normalized), len(normalized_question)) / max(len(normalized), len(normalized_question))
+                print(f"[SEARCH]   {i}. ratio={ratio:.2f} '{key}' -> '{normalized}'")
+            else:
+                print(f"[SEARCH]   {i}. ratio=N/A '{key}' -> '{normalized}'")
 
     return None
 
@@ -1217,6 +1247,14 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
     print(f"\\n[DYNAMIC_QA] Начинаю поиск вопросов на странице...")
     print(f"[DYNAMIC_QA] В пуле доступно {len(QUESTIONS_POOL)} вопросов")
 
+    # КРИТИЧНО: Ждем полной загрузки страницы перед поиском вопросов
+    print(f"[DYNAMIC_QA] Ожидание загрузки страницы...")
+    try:
+        page.wait_for_load_state("networkidle", timeout=10000)
+    except:
+        print(f"[DYNAMIC_QA] [WARN] Таймаут networkidle, продолжаю...")
+    time.sleep(2)  # Дополнительная пауза для рендеринга
+
     # DEBUG: показываем ВСЕ вопросы ИЗ ПУЛА (чтобы видеть все что распарсилось)
     print(f"[DYNAMIC_QA] [DEBUG] Все вопросы в пуле:")
     for i, (key, value) in enumerate(list(QUESTIONS_POOL.items()), 1):
@@ -1225,6 +1263,14 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
 
     # Цикл поиска и ответа на вопросы
     while answered_count < max_questions:
+        # КРИТИЧНО: Ждем появления хотя бы одного видимого heading элемента
+        try:
+            print(f"[DYNAMIC_QA] Ожидание появления heading элементов...")
+            page.wait_for_selector("role=heading", state="visible", timeout=10000)
+            time.sleep(1)  # Дополнительная пауза для стабильности
+        except Exception as e:
+            print(f"[DYNAMIC_QA] [WARN] Таймаут ожидания heading: {e}")
+
         # Найти все heading на странице
         try:
             headings = page.get_by_role("heading").all()
@@ -1234,16 +1280,54 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
             break
 
         found_new_question = False
+        visible_headings_count = 0
 
         # Проверить каждый heading
         for idx, heading in enumerate(headings):
             try:
-                # Получить текст вопроса
-                question_text = heading.inner_text().strip()
+                # ПРОВЕРКА ВИДИМОСТИ: пропускаем невидимые элементы
+                is_visible = False
+                try:
+                    is_visible = heading.is_visible()
+                except:
+                    pass  # Если проверка failed - считаем невидимым
+
+                if not is_visible:
+                    continue  # Пропускаем невидимые headings
+
+                visible_headings_count += 1
+
+                # Получить текст вопроса с агрессивным retry (элемент может быть не готов)
+                question_text = ""
+                max_retries = 5  # Увеличено с 3 до 5 для максимальной стабильности
+
+                for attempt in range(max_retries):
+                    try:
+                        # КРИТИЧНО: Скроллим к элементу чтобы он был в viewport
+                        heading.scroll_into_view_if_needed(timeout=2000)
+
+                        # Дополнительная пауза после скролла для рендеринга
+                        time.sleep(0.3)
+
+                        question_text = heading.inner_text().strip()
+
+                        # Если текст есть и не пустой - отлично
+                        if question_text and len(question_text) >= 3:
+                            break
+
+                        # Если пустой и это не последняя попытка - ждем дольше
+                        if attempt < max_retries - 1:
+                            wait_time = 1.5 * (attempt + 1)  # 1.5s, 3s, 4.5s, 6s
+                            time.sleep(wait_time)
+                    except Exception as e:
+                        if attempt < max_retries - 1:
+                            time.sleep(1.5)
+                        else:
+                            pass  # Последняя попытка failed - пропускаем
 
                 # DEBUG: показываем все heading что находим
-                if answered_count == 0 and idx < 3:  # Только первые 3 и только на первом проходе
-                    print(f"[DYNAMIC_QA] [DEBUG] Обрабатываю heading #{idx+1}: '{question_text}'")
+                if answered_count == 0 and visible_headings_count <= 5:  # Первые 5 видимых
+                    print(f"[DYNAMIC_QA] [DEBUG] Обрабатываю heading #{visible_headings_count} (visible): '{question_text}'")
 
                 # Пропустить если уже отвечали
                 if question_text in answered_questions:
@@ -1330,9 +1414,9 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
 
                     print(f"[DYNAMIC_QA] [OK] Вопрос обработан ({answered_count}/{max_questions})")
 
-                    # Пауза для загрузки следующего вопроса (увеличена до 3 сек)
-                    print(f"[DYNAMIC_QA] Ожидание загрузки следующего вопроса (3 сек)...")
-                    time.sleep(3)
+                    # Пауза для загрузки следующего вопроса (увеличена до 4 сек для стабильности)
+                    print(f"[DYNAMIC_QA] Ожидание загрузки следующего вопроса (4 сек)...")
+                    time.sleep(4)
 
                     # Попробовать дождаться изменения DOM (новый вопрос)
                     try:
@@ -1352,16 +1436,23 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
         # Если не нашли новых вопросов - выходим
         if not found_new_question:
             print(f"[DYNAMIC_QA] Новых вопросов не найдено, завершаю поиск")
+            print(f"[DYNAMIC_QA] Видимых headings на этой итерации: {visible_headings_count}")
 
             # DEBUG: показываем первые 5 heading что были на странице
             try:
                 headings = page.get_by_role("heading").all()
                 if len(headings) > 0:
-                    print(f"[DYNAMIC_QA] [DEBUG] Примеры heading на странице:")
-                    for i, h in enumerate(headings[:5]):
+                    print(f"[DYNAMIC_QA] [DEBUG] Примеры heading на странице (всего {len(headings)}):")
+                    shown = 0
+                    for i, h in enumerate(headings):
+                        if shown >= 5:
+                            break
                         try:
+                            is_vis = h.is_visible()
                             text = h.inner_text().strip()
-                            print(f"[DYNAMIC_QA]   {i+1}. '{text}'")
+                            visibility_mark = "[VISIBLE]" if is_vis else "[HIDDEN]"
+                            print(f"[DYNAMIC_QA]   {i+1}. {visibility_mark} '{text}'")
+                            shown += 1
                         except:
                             pass
             except:
@@ -1538,8 +1629,19 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
                 if '/api/' in url or '/bind' in url or response.request.resource_type == 'xhr':
                     print(f"[NETWORK_DEBUG] API Request: {{response.status}} {{url}}", flush=True)
 
-                # ТОЧНАЯ ПРОВЕРКА: Сохраняем ТОЛЬКО запросы с конкретного URL
-                is_validate = url == 'https://app.joinroot.com/bind_api/web/validate'
+                # 🔥 ЖЕСТКАЯ ПРОВЕРКА: Если это запрос validate - ОБЯЗАТЕЛЬНО сохраняем в файл
+                # ВАЖНО: Записываем ВСЕ validate запросы, без остановки!
+                # Проверяем:
+                # 1. Общая проверка: 'validate' в URL
+                # 2. ЖЕСТКИЙ URL: конкретный путь bind_api/web/validate
+                # 3. Домены: joinroot.com, joinroci.com, compare.com
+                is_validate = (
+                    'validate' in url.lower() or
+                    'bind_api/web/validate' in url or
+                    ('joinroot.com' in url and '/bind' in url) or
+                    ('joinroci.com' in url and '/bind' in url) or
+                    ('compare.com' in url and '/validate' in url)
+                )
 
                 if is_validate:
                     validate_counter += 1
@@ -1620,6 +1722,10 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
 
         # Единый return code (всегда возвращаем extracted_fields, даже если они пустые)
         network_return_code = '''
+        # Ожидание финальных validate запросов (они приходят асинхронно после последних действий)
+        print("[NETWORK_CAPTURE] Ожидание финальных validate запросов (20 сек)...", flush=True)
+        page2.wait_for_timeout(20000)
+
         # 🌐 Вывод захваченных данных (если есть)
         print(f"\\n[NETWORK_CAPTURE] === ИТОГОВЫЕ ДАННЫЕ ===")
         print(f"[NETWORK_CAPTURE] Обработано network responses: {{total_responses_counter}}", flush=True)
@@ -1760,6 +1866,7 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
         retry_attempts = 3  # Количество попыток для #retry
         retry_wait = 30  # Время ожидания между попытками (сек)
         retry_scroll_search = False  # Использовать ли scroll_search в retry
+        conditional_popup_next = False  # Флаг для #auto_conditional_popup
         current_page_context = 'page'  # Отслеживание текущего контекста страницы (page, page1, page2, page3)
 
         while i < len(lines):
@@ -1800,11 +1907,127 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
 
             # Отслеживаем вход в with блок
             if stripped.startswith('with '):
-                result_lines.append(line)
-                inside_with_block = True
-                with_block_indent = current_indent
-                i += 1
-                continue
+                # Проверяем, является ли это условным popup
+                if conditional_popup_next and 'page.expect_popup()' in stripped:
+                    # УНИВЕРСАЛЬНАЯ ОБРАБОТКА УСЛОВНОГО POPUP
+                    indent_str = ' ' * current_indent
+
+                    # Извлекаем переменную popup (page1_info, page2_info, etc.)
+                    popup_var_match = re.search(r'with\s+(\w+)\.expect_popup\(\)\s+as\s+(\w+):', stripped)
+                    if popup_var_match:
+                        page_var = popup_var_match.group(1)  # page
+                        popup_info_var = popup_var_match.group(2)  # page1_info
+
+                        # Извлекаем имя результирующей переменной (page1, page2, etc.) из следующих строк
+                        result_page_var = None
+                        button_name = None
+                        button_selector = None
+
+                        # Ищем следующие несколько строк для извлечения кнопки и результата
+                        for j in range(i + 1, min(i + 10, len(lines))):
+                            next_line = lines[j].strip()
+
+                            # Извлекаем кнопку из клика
+                            if '.click()' in next_line and button_name is None:
+                                # Пробуем get_by_role с name
+                                btn_match = re.search(r'get_by_role\(["\']button["\']\s*,\s*name=["\']([^"\']+)["\']\)', next_line)
+                                if btn_match:
+                                    button_name = btn_match.group(1)
+                                    button_selector = f'{page_var}.get_by_role("button", name="{button_name}")'
+
+                            # Извлекаем результирующую переменную (page1 = page1_info.value)
+                            if f'= {popup_info_var}.value' in next_line:
+                                result_match = re.search(r'(\w+)\s*=\s*' + re.escape(popup_info_var) + r'\.value', next_line)
+                                if result_match:
+                                    result_page_var = result_match.group(1)
+                                break
+
+                        if button_name and result_page_var:
+                            # Генерируем универсальный код для условного popup
+                            result_lines.append(f"{indent_str}# УНИВЕРСАЛЬНАЯ ОБРАБОТКА УСЛОВНОГО POPUP (после заполнения телефона)")
+                            result_lines.append(f"{indent_str}{result_page_var} = None")
+                            result_lines.append(f"{indent_str}max_popup_attempts = 2")
+                            result_lines.append(f"{indent_str}for popup_attempt in range(max_popup_attempts):")
+                            result_lines.append(f"{indent_str}    try:")
+                            result_lines.append(f"{indent_str}        print(f'[CONDITIONAL_POPUP] Попытка {{popup_attempt + 1}}/{{max_popup_attempts}} открыть popup...', flush=True)")
+                            result_lines.append(f"{indent_str}        with {page_var}.expect_popup(timeout=8000) as {popup_info_var}:")
+                            result_lines.append(f"{indent_str}            if popup_attempt == 0:")
+                            result_lines.append(f"{indent_str}                # Первая попытка - обычный клик")
+                            result_lines.append(f"{indent_str}                {button_selector}.click()")
+                            result_lines.append(f"{indent_str}            else:")
+                            result_lines.append(f"{indent_str}                # Вторая попытка - ищем кнопку на промежуточной странице")
+                            result_lines.append(f"{indent_str}                print('[CONDITIONAL_POPUP] Ищу кнопку на промежуточной странице...', flush=True)")
+                            result_lines.append(f"{indent_str}                try:")
+                            result_lines.append(f"{indent_str}                    # Ждем появления кнопки на промежуточной странице")
+                            result_lines.append(f"{indent_str}                    button = {button_selector}")
+                            result_lines.append(f"{indent_str}                    button.wait_for(state='visible', timeout=5000)")
+                            result_lines.append(f"{indent_str}                    print('[CONDITIONAL_POPUP] Кнопка найдена на промежуточной странице', flush=True)")
+                            result_lines.append(f"{indent_str}                    button.click()")
+                            result_lines.append(f"{indent_str}                except Exception as btn_err:")
+                            result_lines.append(f"{indent_str}                    print(f'[CONDITIONAL_POPUP] Кнопка не найдена: {{btn_err}}', flush=True)")
+                            result_lines.append(f"{indent_str}                    raise")
+                            result_lines.append(f"")
+                            result_lines.append(f"{indent_str}        {result_page_var} = {popup_info_var}.value")
+                            result_lines.append(f"{indent_str}        print(f'[CONDITIONAL_POPUP] Popup успешно открыт с попытки {{popup_attempt + 1}}', flush=True)")
+                            result_lines.append(f"{indent_str}        break")
+                            result_lines.append(f"")
+                            result_lines.append(f"{indent_str}    except Exception as e:")
+                            result_lines.append(f"{indent_str}        if popup_attempt == 0:")
+                            result_lines.append(f"{indent_str}            print(f'[CONDITIONAL_POPUP] Popup не открылся, проверяю промежуточную страницу...', flush=True)")
+                            result_lines.append(f"{indent_str}            try:")
+                            result_lines.append(f"{indent_str}                # Ждем загрузки промежуточной страницы")
+                            result_lines.append(f"{indent_str}                {page_var}.wait_for_load_state('domcontentloaded', timeout=8000)")
+                            result_lines.append(f"{indent_str}                time.sleep(1)  # Дополнительная пауза для стабильности")
+                            result_lines.append(f"{indent_str}            except:")
+                            result_lines.append(f"{indent_str}                pass")
+                            result_lines.append(f"{indent_str}            continue")
+                            result_lines.append(f"{indent_str}        else:")
+                            result_lines.append(f"{indent_str}            print(f'[CONDITIONAL_POPUP] КРИТИЧЕСКАЯ ОШИБКА: {{e}}', flush=True)")
+                            result_lines.append(f"{indent_str}            raise Exception(f'Не удалось открыть popup после {{max_popup_attempts}} попыток')")
+                            result_lines.append(f"")
+                            result_lines.append(f"{indent_str}if not {result_page_var}:")
+                            result_lines.append(f"{indent_str}    raise Exception('FATAL: {result_page_var} не был создан')")
+
+                            # Пропускаем следующие строки, которые уже обработаны (клик и присваивание)
+                            i += 1
+                            while i < len(lines):
+                                next_stripped = lines[i].strip()
+                                if f'= {popup_info_var}.value' in next_stripped:
+                                    i += 1  # Пропускаем строку присваивания
+                                    break
+                                elif '.click()' in next_stripped and button_name in next_stripped:
+                                    i += 1  # Пропускаем строку клика
+                                elif not next_stripped:
+                                    i += 1  # Пропускаем пустые строки
+                                else:
+                                    break
+
+                            conditional_popup_next = False  # Сбрасываем флаг
+                            continue
+                        else:
+                            # Не удалось извлечь кнопку или результат - используем стандартную обработку
+                            print("[GENERATOR] WARNING: Не удалось извлечь кнопку или результат для условного popup, используем стандартную обработку")
+                            result_lines.append(line)
+                            inside_with_block = True
+                            with_block_indent = current_indent
+                            conditional_popup_next = False
+                            i += 1
+                            continue
+                    else:
+                        # Не удалось распарсить with блок - используем стандартную обработку
+                        result_lines.append(line)
+                        inside_with_block = True
+                        with_block_indent = current_indent
+                        conditional_popup_next = False
+                        i += 1
+                        continue
+                else:
+                    # Обычный with блок
+                    result_lines.append(line)
+                    inside_with_block = True
+                    with_block_indent = current_indent
+                    i += 1
+                    continue
 
             # Отслеживаем выход из with блока
             if inside_with_block and current_indent <= with_block_indent and not stripped.startswith('with '):
@@ -1863,12 +2086,53 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
                     i += 1
                     continue
 
-                # #optional - следующее действие опциональное (может не быть на странице)
-                if special_cmd == '#optional':
-                    optional_next_action = True
-                    result_lines.append(f"{indent_str}# Optional element (may not be present)")
-                    i += 1
-                    continue
+                # #optional:N - группа из N действий (появляются вместе или не появляются)
+                # Синтаксис: #optional или #optional:N
+                # N - количество следующих действий для группировки (default: 1)
+                optional_match = re.match(r'#\s*optional(?::(\d+))?$', special_cmd)
+                if optional_match:
+                    group_size = int(optional_match.group(1)) if optional_match.group(1) else 1
+
+                    if group_size == 1:
+                        # Обычный optional - одно действие
+                        optional_next_action = True
+                        result_lines.append(f"{indent_str}# Optional element (may not be present)")
+                        i += 1
+                        continue
+                    else:
+                        # Optional группа - несколько действий в одном try-except
+                        result_lines.append(f"{indent_str}# Optional group: {group_size} actions (may not be present together)")
+                        result_lines.append(f"{indent_str}print('[OPTIONAL_GROUP] Trying optional group ({group_size} actions)...', flush=True)")
+                        result_lines.append(f"{indent_str}# Устанавливаем короткий timeout (3 сек) для optional группы")
+                        result_lines.append(f"{indent_str}{current_page_context}.set_default_timeout(3000)")
+                        result_lines.append(f"{indent_str}try:")
+
+                        # Собираем следующие N действий
+                        i += 1
+                        actions_collected = 0
+                        while i < len(lines) and actions_collected < group_size:
+                            action_line = lines[i]
+                            action_stripped = action_line.strip()
+
+                            # Пропускаем пустые строки и комментарии (кроме специальных команд)
+                            if not action_stripped or (action_stripped.startswith('#') and not action_stripped.startswith('#pause')):
+                                i += 1
+                                continue
+
+                            # Добавляем действие с отступом для try блока
+                            action_indent = ' ' * (current_indent + 4)
+                            result_lines.append(f"{action_indent}{action_stripped}")
+                            actions_collected += 1
+                            i += 1
+
+                        result_lines.append(f"{indent_str}    print('[OPTIONAL_GROUP] [OK] All actions completed', flush=True)")
+                        result_lines.append(f"{indent_str}except Exception as e:")
+                        result_lines.append(f"{indent_str}    print(f'[OPTIONAL_GROUP] [SKIP] Elements not found: {{type(e).__name__}} (this is OK)', flush=True)")
+                        result_lines.append(f"{indent_str}    pass")
+                        result_lines.append(f"{indent_str}finally:")
+                        result_lines.append(f"{indent_str}    # Восстанавливаем стандартный timeout (30 сек)")
+                        result_lines.append(f"{indent_str}    {current_page_context}.set_default_timeout(30000)")
+                        continue
 
                 # #retry - повторять попытки найти элемент с ожиданием между попытками
                 # Синтаксис: #retry или #retry:N или #retry:N:S или #retry:N:S:scroll_search
@@ -1882,6 +2146,14 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
                     retry_wait = int(retry_match.group(2)) if retry_match.group(2) else 30
                     retry_scroll_search = retry_match.group(3) == 'scroll_search' if retry_match.group(3) else False
                     result_lines.append(f"{indent_str}# Retry enabled: {retry_attempts} attempts, {retry_wait}s wait{', with scroll_search' if retry_scroll_search else ''}")
+                    i += 1
+                    continue
+
+                # #auto_conditional_popup - следующий with page.expect_popup() должен обрабатываться универсально
+                # (для случаев, когда popup может открыться сразу или через промежуточную страницу)
+                if special_cmd == '#auto_conditional_popup':
+                    conditional_popup_next = True
+                    result_lines.append(f"{indent_str}# Conditional popup handling enabled for next with block")
                     i += 1
                     continue
 
@@ -1903,6 +2175,7 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
                 '.click(',
                 '.fill(',
                 '.press(',
+                '.press_sequentially(',  # ВАЖНО: для симуляции набора текста
                 '.type(',
                 '.select_option(',
                 '.check(',
@@ -2050,12 +2323,21 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
                         # Более понятные сообщения для опциональных элементов
                         # Всегда показываем optional (важно)
                         result_lines.append(f"{indent_str}print('[OPTIONAL] Trying optional element...', flush=True)")
+
+                        # КРИТИЧНО: Устанавливаем короткий timeout для optional элементов
+                        result_lines.append(f"{indent_str}# Устанавливаем короткий timeout (3 сек) для optional элементов")
+                        result_lines.append(f"{indent_str}{current_page_context}.set_default_timeout(3000)")
+
                         result_lines.append(f"{indent_str}try:")
                         result_lines.append(f"{indent_str}    {stripped}")
-                        result_lines.append(f"{indent_str}    print('[OPTIONAL] [OK] Element found and clicked', flush=True)")
+                        result_lines.append(f"{indent_str}    print('[OPTIONAL] [OK] Element found and action completed', flush=True)")
                         result_lines.append(f"{indent_str}except Exception as e:")
                         result_lines.append(f"{indent_str}    print(f'[OPTIONAL] [SKIP] Element not found or error: {{type(e).__name__}} (this is OK)', flush=True)")
                         result_lines.append(f"{indent_str}    pass")
+                        result_lines.append(f"{indent_str}finally:")
+                        result_lines.append(f"{indent_str}    # Восстанавливаем стандартный timeout (30 сек)")
+                        result_lines.append(f"{indent_str}    {current_page_context}.set_default_timeout(30000)")
+
                         optional_next_action = False  # Сбрасываем флаг
                     else:
                         # Обычные действия вне with блока
@@ -2143,20 +2425,18 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
 
 def process_task(task_data: tuple) -> Dict:
     """Обработать одну задачу в отдельном потоке"""
-    thread_id, iteration_number, data_row, total_count, results_file_path = task_data
+    thread_id, iteration_number, data_row, total_count, csv_file_path, fieldnames = task_data
 
-    # Получаем номер строки из данных
-    row_number = data_row.get('__row_number__', iteration_number)
+    # Получаем индекс строки в CSV (0-based, не считая заголовок)
+    csv_row_index = data_row.get('__csv_row_index__', 0)
+    display_row_number = csv_row_index + 1  # Для отображения (1-based)
 
     print(f"\\n{'#'*60}")
-    print(f"# THREAD {thread_id} | ROW {row_number}/{total_count}")
+    print(f"# THREAD {thread_id} | ITERATION {iteration_number}/{total_count} | CSV ROW {display_row_number}")
     print(f"{'#'*60}")
 
-    # Записываем начало обработки
-    import datetime
-    start_time = datetime.datetime.now().isoformat()
-    write_row_status(results_file_path, row_number, "processing", start_time, data_row=data_row)
-    print(f"[PROGRESS] Строка {row_number} отмечена как 'processing'")
+    # Помечаем строку как взятую в работу (ставим звездочку в колонке индекс 1)
+    mark_row_in_progress(csv_file_path, csv_row_index, fieldnames)
 
     # Задержка для разнесения запусков Octobrowser (снижение нагрузки на систему)
     startup_delay = (thread_id - 1) * 3  # 0s, 3s, 6s, 9s, 12s...
@@ -2168,7 +2448,7 @@ def process_task(task_data: tuple) -> Dict:
     result = {
         'thread_id': thread_id,
         'iteration': iteration_number,
-        'row_number': row_number,
+        'csv_row': display_row_number,
         'success': False,
         'error': None
     }
@@ -2182,9 +2462,7 @@ def process_task(task_data: tuple) -> Dict:
 
         if not profile_uuid:
             result['error'] = "Profile creation failed"
-            end_time = datetime.datetime.now().isoformat()
-            write_row_status(results_file_path, row_number, "failed", start_time, end_time, error_msg=result['error'], data_row=data_row)
-            print(f"[PROGRESS] Строка {row_number} отмечена как 'failed': {result['error']}")
+            print(f"[THREAD {thread_id}] [ERROR] {result['error']}")
             return result
 
         print(f"[THREAD {thread_id}] Ожидание синхронизации (5 сек)...")
@@ -2193,17 +2471,13 @@ def process_task(task_data: tuple) -> Dict:
         start_data = start_profile(profile_uuid)
         if not start_data:
             result['error'] = "Profile start failed"
-            end_time = datetime.datetime.now().isoformat()
-            write_row_status(results_file_path, row_number, "failed", start_time, end_time, error_msg=result['error'], data_row=data_row)
-            print(f"[PROGRESS] Строка {row_number} отмечена как 'failed': {result['error']}")
+            print(f"[THREAD {thread_id}] [ERROR] {result['error']}")
             return result
 
         debug_url = start_data.get('ws_endpoint')
         if not debug_url:
             result['error'] = "No CDP endpoint"
-            end_time = datetime.datetime.now().isoformat()
-            write_row_status(results_file_path, row_number, "failed", start_time, end_time, error_msg=result['error'], data_row=data_row)
-            print(f"[PROGRESS] Строка {row_number} отмечена как 'failed': {result['error']}")
+            print(f"[THREAD {thread_id}] [ERROR] {result['error']}")
             return result
 
         with sync_playwright() as playwright:
@@ -2227,25 +2501,17 @@ def process_task(task_data: tuple) -> Dict:
 
         stop_profile(profile_uuid)
 
-        # Записываем финальный статус с extracted_fields
-        end_time = datetime.datetime.now().isoformat()
+        # Итоги обработки
         if result['success']:
-            write_row_status(results_file_path, row_number, "success", start_time, end_time, data_row=data_row, extracted_fields=extracted_fields)
-            print(f"[PROGRESS] Строка {row_number} отмечена как 'success'")
+            print(f"[ITERATION {iteration_number}] [OK] Завершено успешно")
         else:
-            write_row_status(results_file_path, row_number, "failed", start_time, end_time, error_msg=result.get('error', 'Unknown error'), data_row=data_row)
-            print(f"[PROGRESS] Строка {row_number} отмечена как 'failed'")
+            print(f"[ITERATION {iteration_number}] [FAIL] Завершено с ошибкой: {result.get('error', 'Unknown error')}")
 
     except Exception as e:
         print(f"[THREAD {thread_id}] [ERROR] Критическая ошибка: {e}")
         import traceback
         traceback.print_exc()
         result['error'] = str(e)
-
-        # Записываем ошибку
-        end_time = datetime.datetime.now().isoformat()
-        write_row_status(results_file_path, row_number, "error", start_time, end_time, error_msg=str(e), data_row=data_row)
-        print(f"[PROGRESS] Строка {row_number} отмечена как 'error': {e}")
 
     finally:
         if profile_uuid:
@@ -2271,26 +2537,34 @@ def main():
         print("[MAIN] [ERROR] Локальный Octobrowser недоступен!")
         return
 
-    # Загружаем CSV и получаем пути к файлам + отфильтрованные данные
-    csv_file_path, results_file_path, csv_data = load_csv_data()
+    # Загружаем CSV и получаем отфильтрованные данные
+    csv_file_path, fieldnames, csv_data = load_csv_data()
 
-    if not csv_file_path or not results_file_path:
+    if not csv_file_path or not fieldnames:
         print("[ERROR] Не удалось загрузить CSV файл")
         return
 
     print(f"[MAIN] CSV файл: {csv_file_path}")
-    print(f"[MAIN] Файл результатов: {results_file_path}")
     print(f"[MAIN] К обработке: {len(csv_data)} новых строк")
 
     if not csv_data:
         print("[MAIN] Нет новых данных для обработки (все строки уже обработаны)")
         return
 
-    # Формируем задачи с учетом results_file_path
+    # ПРИМЕНЯЕМ ЛИМИТ ИТЕРАЦИЙ
+    if MAX_ITERATIONS is not None and MAX_ITERATIONS > 0:
+        original_count = len(csv_data)
+        csv_data = csv_data[:MAX_ITERATIONS]
+        print(f"[MAIN] Лимит итераций: {MAX_ITERATIONS}")
+        print(f"[MAIN] Обрабатываем: {len(csv_data)} из {original_count} строк")
+    else:
+        print(f"[MAIN] Лимит итераций: НЕТ (обрабатываем все строки)")
+
+    # Формируем задачи с новой системой (передаем csv_file_path и fieldnames)
     tasks = []
     for iteration_number, data_row in enumerate(csv_data, 1):
         thread_id = (iteration_number - 1) % THREADS_COUNT + 1
-        task_data = (thread_id, iteration_number, data_row, len(csv_data), results_file_path)
+        task_data = (thread_id, iteration_number, data_row, len(csv_data), csv_file_path, fieldnames)
         tasks.append(task_data)
 
     actual_threads = min(THREADS_COUNT, len(csv_data))
@@ -2308,10 +2582,10 @@ def main():
 
                 if result['success']:
                     success_count += 1
-                    print(f"[MAIN] [OK] Строка {result.get('row_number', result['iteration'])} завершена успешно")
+                    print(f"[MAIN] [OK] Итерация {result['iteration']} (CSV строка {result['csv_row']}) завершена успешно")
                 else:
                     fail_count += 1
-                    print(f"[MAIN] [ERROR] Строка {result.get('row_number', result['iteration'])} завершена с ошибкой")
+                    print(f"[MAIN] [ERROR] Итерация {result['iteration']} (CSV строка {result['csv_row']}) завершена с ошибкой")
 
             except Exception as e:
                 fail_count += 1
