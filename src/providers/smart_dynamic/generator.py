@@ -948,119 +948,57 @@ def execute_special_command(command: str, page, data_row: Dict):
 # ЗАГРУЗКА CSV И ОТСЛЕЖИВАНИЕ ПРОГРЕССА
 # ============================================================
 
-def load_processed_rows(results_file_path: str) -> set:
+def mark_row_in_progress(csv_file_path: str, row_index: int, fieldnames: list):
     """
-    Читает файл результатов и возвращает set номеров уже обработанных строк
+    Помечает строку как взятую в работу - ставит звездочку (*) в колонку с индексом 1
 
     Args:
-        results_file_path: Путь к файлу результатов
-
-    Returns:
-        Set номеров строк, которые уже были обработаны (любой статус)
+        csv_file_path: Путь к CSV файлу
+        row_index: Индекс строки в CSV (0-based, не считая заголовок)
+        fieldnames: Список имен полей (заголовков)
     """
-    processed_rows = set()
-
-    if not os.path.exists(results_file_path):
-        print(f"[RESULTS] Файл результатов не найден (это нормально для первого запуска): {results_file_path}")
-        return processed_rows
-
     try:
-        with open(results_file_path, 'r', encoding='utf-8') as f:
+        # Читаем весь CSV
+        all_rows = []
+        with open(csv_file_path, 'r', encoding='utf-8', newline='') as f:
             reader = csv.DictReader(f)
-            for row in reader:
-                if 'row_number' in row:
-                    processed_rows.add(int(row['row_number']))
+            all_rows = list(reader)
 
-        print(f"[RESULTS] Загружено {len(processed_rows)} обработанных строк из результатов")
-    except Exception as e:
-        print(f"[RESULTS] [WARNING] Ошибка чтения результатов: {e}")
+        # Проверяем что индекс валидный
+        if row_index < 0 or row_index >= len(all_rows):
+            print(f"[MARK] [ERROR] Неверный индекс строки: {row_index}")
+            return
 
-    return processed_rows
+        # Получаем имя второго поля (индекс 1)
+        if len(fieldnames) < 2:
+            print(f"[MARK] [ERROR] CSV должен иметь минимум 2 колонки")
+            return
 
+        second_field_name = fieldnames[1]
 
-def write_row_status(results_file_path: str, row_number: int, status: str, start_time: str, end_time: str = "", error_msg: str = "", data_row: Dict = None, extracted_fields: Dict = None):
-    """
-    Записывает или обновляет статус обработки строки в файл результатов
+        # Ставим звездочку в колонке с индексом 1
+        all_rows[row_index][second_field_name] = "*"
 
-    Args:
-        results_file_path: Путь к файлу результатов
-        row_number: Номер строки в исходном CSV (1-based)
-        status: Статус - "processing", "success", "failed", "error"
-        start_time: Время начала обработки (ISO format)
-        end_time: Время завершения (пусто для "processing")
-        error_msg: Сообщение об ошибке (для failed/error)
-        data_row: Данные строки из CSV (для reference)
-        extracted_fields: Извлеченные поля из Network responses (словарь field_name: value)
-    """
-    import datetime
-
-    # Проверяем существует ли файл
-    file_exists = os.path.exists(results_file_path)
-
-    # Если файл существует, читаем его и ищем строку
-    existing_rows = {}
-    base_fieldnames = ['row_number', 'status', 'start_time', 'end_time', 'error_msg', 'data']
-
-    if file_exists:
-        try:
-            with open(results_file_path, 'r', encoding='utf-8') as f:
-                reader = csv.DictReader(f)
-                fieldnames = list(reader.fieldnames) if reader.fieldnames else base_fieldnames
-                for row in reader:
-                    if 'row_number' in row:
-                        existing_rows[int(row['row_number'])] = row
-        except Exception as e:
-            print(f"[RESULTS] [WARNING] Ошибка чтения результатов для обновления: {e}")
-            existing_rows = {}
-            fieldnames = base_fieldnames
-    else:
-        fieldnames = base_fieldnames
-
-    # Создаем или обновляем запись
-    row_data = {
-        'row_number': row_number,
-        'status': status,
-        'start_time': start_time,
-        'end_time': end_time,
-        'error_msg': error_msg,
-        'data': json.dumps(data_row, ensure_ascii=False) if data_row else ""
-    }
-
-    # 🌐 Добавляем извлеченные поля из Network responses
-    if extracted_fields:
-        for field_name, field_value in extracted_fields.items():
-            # Добавляем колонку если ее еще нет
-            if field_name not in fieldnames:
-                fieldnames.append(field_name)
-                print(f"[RESULTS] [NETWORK] Добавлена новая колонка: {field_name}", flush=True)
-
-            # Записываем значение
-            row_data[field_name] = str(field_value)
-            print(f"[RESULTS] [NETWORK] Строка {row_number}: {field_name} = {field_value}", flush=True)
-
-    existing_rows[row_number] = row_data
-
-    # Перезаписываем весь файл
-    try:
-        with open(results_file_path, 'w', encoding='utf-8', newline='') as f:
+        # Перезаписываем файл
+        with open(csv_file_path, 'w', encoding='utf-8', newline='') as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()
+            writer.writerows(all_rows)
 
-            # Сортируем по номеру строки
-            for rn in sorted(existing_rows.keys()):
-                writer.writerow(existing_rows[rn])
+        print(f"[MARK] [OK] Строка {row_index + 1} помечена как взятая в работу (*)")
 
-        # print(f"[RESULTS] Записан статус для строки {row_number}: {status}")
     except Exception as e:
-        print(f"[RESULTS] [ERROR] Не удалось записать результат: {e}")
+        print(f"[MARK] [ERROR] Не удалось пометить строку: {e}")
 
 
 def load_csv_data() -> tuple:
     """
     Загрузить данные из CSV файла через диалог и отфильтровать уже обработанные
 
+    Обработанные строки определяются по наличию звездочки (*) в колонке с индексом 1
+
     Returns:
-        Tuple (csv_file_path, results_file_path, unprocessed_data)
+        Tuple (csv_file_path, fieldnames, unprocessed_data)
     """
     print("[CSV] Выберите CSV файл с данными...")
 
@@ -1078,58 +1016,61 @@ def load_csv_data() -> tuple:
 
     if not csv_file_path:
         print("[CSV] [ERROR] Файл не выбран")
-        return ("", "", [])
+        return ("", [], [])
 
     if not os.path.exists(csv_file_path):
         print(f"[CSV] [ERROR] Файл не существует: {csv_file_path}")
-        return ("", "", [])
+        return ("", [], [])
 
     print(f"[CSV] Загрузка файла: {csv_file_path}")
 
-    # Создаем путь к файлу результатов
-    csv_dir = os.path.dirname(csv_file_path)
-    csv_basename = os.path.splitext(os.path.basename(csv_file_path))[0]
-    results_file_path = os.path.join(csv_dir, f"{csv_basename}_results.csv")
-
-    print(f"[CSV] Файл результатов: {results_file_path}")
-
-    # Загружаем обработанные строки
-    processed_rows = load_processed_rows(results_file_path)
-
     # Загружаем CSV данные
     all_data = []
+    fieldnames = []
+
     try:
         with open(csv_file_path, 'r', encoding='utf-8') as f:
             reader = csv.DictReader(f)
+            fieldnames = list(reader.fieldnames) if reader.fieldnames else []
             all_data = list(reader)
 
         print(f"[CSV] [OK] Загружено {len(all_data)} строк из CSV")
+        print(f"[CSV] Заголовки: {', '.join(fieldnames)}")
 
-        if all_data and len(all_data) > 0:
-            headers = list(all_data[0].keys())
-            print(f"[CSV] Заголовки: {', '.join(headers)}")
+        # Проверяем что есть минимум 2 колонки
+        if len(fieldnames) < 2:
+            print(f"[CSV] [ERROR] CSV должен иметь минимум 2 колонки")
+            return ("", [], [])
 
     except Exception as e:
         print(f"[CSV] [ERROR] Ошибка загрузки: {e}")
-        return ("", "", [])
+        return ("", [], [])
 
-    # Фильтруем уже обработанные строки
+    # Имя второй колонки (индекс 1) - здесь проверяем звездочку
+    second_field_name = fieldnames[1]
+    print(f"[CSV] Колонка маркера обработки: '{second_field_name}' (индекс 1)")
+
+    # Фильтруем строки со звездочкой в колонке индекс 1
     unprocessed_data = []
-    for row_idx, data_row in enumerate(all_data, 1):
-        # Добавляем номер строки в данные
-        data_row['__row_number__'] = row_idx
+    processed_count = 0
 
-        # Пропускаем уже обработанные
-        if row_idx in processed_rows:
-            continue
+    for csv_row_idx, data_row in enumerate(all_data):
+        # Сохраняем индекс строки в CSV (0-based, не считая заголовок)
+        data_row['__csv_row_index__'] = csv_row_idx
+
+        # Проверяем есть ли звездочка в колонке с индексом 1
+        marker_value = data_row.get(second_field_name, "").strip()
+
+        if marker_value == "*":
+            processed_count += 1
+            continue  # Пропускаем строки со звездочкой
 
         unprocessed_data.append(data_row)
 
-    skipped_count = len(all_data) - len(unprocessed_data)
-    print(f"[CSV] Пропущено {skipped_count} обработанных строк")
+    print(f"[CSV] Пропущено строк со звездочкой (*): {processed_count}")
     print(f"[CSV] К обработке: {len(unprocessed_data)} новых строк")
 
-    return (csv_file_path, results_file_path, unprocessed_data)
+    return (csv_file_path, fieldnames, unprocessed_data)
 
 
 '''
@@ -2357,20 +2298,18 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
 
 def process_task(task_data: tuple) -> Dict:
     """Обработать одну задачу в отдельном потоке"""
-    thread_id, iteration_number, data_row, total_count, results_file_path = task_data
+    thread_id, iteration_number, data_row, total_count, csv_file_path, fieldnames = task_data
 
-    # Получаем номер строки из данных
-    row_number = data_row.get('__row_number__', iteration_number)
+    # Получаем индекс строки в CSV (0-based, не считая заголовок)
+    csv_row_index = data_row.get('__csv_row_index__', 0)
+    display_row_number = csv_row_index + 1  # Для отображения (1-based)
 
     print(f"\\n{'#'*60}")
-    print(f"# THREAD {thread_id} | ROW {row_number}/{total_count}")
+    print(f"# THREAD {thread_id} | ITERATION {iteration_number}/{total_count} | CSV ROW {display_row_number}")
     print(f"{'#'*60}")
 
-    # Записываем начало обработки
-    import datetime
-    start_time = datetime.datetime.now().isoformat()
-    write_row_status(results_file_path, row_number, "processing", start_time, data_row=data_row)
-    print(f"[PROGRESS] Строка {row_number} отмечена как 'processing'")
+    # Помечаем строку как взятую в работу (ставим звездочку в колонке индекс 1)
+    mark_row_in_progress(csv_file_path, csv_row_index, fieldnames)
 
     # Задержка для разнесения запусков Octobrowser (снижение нагрузки на систему)
     startup_delay = (thread_id - 1) * 3  # 0s, 3s, 6s, 9s, 12s...
@@ -2382,7 +2321,7 @@ def process_task(task_data: tuple) -> Dict:
     result = {
         'thread_id': thread_id,
         'iteration': iteration_number,
-        'row_number': row_number,
+        'csv_row': display_row_number,
         'success': False,
         'error': None
     }
@@ -2396,9 +2335,7 @@ def process_task(task_data: tuple) -> Dict:
 
         if not profile_uuid:
             result['error'] = "Profile creation failed"
-            end_time = datetime.datetime.now().isoformat()
-            write_row_status(results_file_path, row_number, "failed", start_time, end_time, error_msg=result['error'], data_row=data_row)
-            print(f"[PROGRESS] Строка {row_number} отмечена как 'failed': {result['error']}")
+            print(f"[THREAD {thread_id}] [ERROR] {result['error']}")
             return result
 
         print(f"[THREAD {thread_id}] Ожидание синхронизации (5 сек)...")
@@ -2407,17 +2344,13 @@ def process_task(task_data: tuple) -> Dict:
         start_data = start_profile(profile_uuid)
         if not start_data:
             result['error'] = "Profile start failed"
-            end_time = datetime.datetime.now().isoformat()
-            write_row_status(results_file_path, row_number, "failed", start_time, end_time, error_msg=result['error'], data_row=data_row)
-            print(f"[PROGRESS] Строка {row_number} отмечена как 'failed': {result['error']}")
+            print(f"[THREAD {thread_id}] [ERROR] {result['error']}")
             return result
 
         debug_url = start_data.get('ws_endpoint')
         if not debug_url:
             result['error'] = "No CDP endpoint"
-            end_time = datetime.datetime.now().isoformat()
-            write_row_status(results_file_path, row_number, "failed", start_time, end_time, error_msg=result['error'], data_row=data_row)
-            print(f"[PROGRESS] Строка {row_number} отмечена как 'failed': {result['error']}")
+            print(f"[THREAD {thread_id}] [ERROR] {result['error']}")
             return result
 
         with sync_playwright() as playwright:
@@ -2441,25 +2374,17 @@ def process_task(task_data: tuple) -> Dict:
 
         stop_profile(profile_uuid)
 
-        # Записываем финальный статус с extracted_fields
-        end_time = datetime.datetime.now().isoformat()
+        # Итоги обработки
         if result['success']:
-            write_row_status(results_file_path, row_number, "success", start_time, end_time, data_row=data_row, extracted_fields=extracted_fields)
-            print(f"[PROGRESS] Строка {row_number} отмечена как 'success'")
+            print(f"[ITERATION {iteration_number}] [OK] Завершено успешно")
         else:
-            write_row_status(results_file_path, row_number, "failed", start_time, end_time, error_msg=result.get('error', 'Unknown error'), data_row=data_row)
-            print(f"[PROGRESS] Строка {row_number} отмечена как 'failed'")
+            print(f"[ITERATION {iteration_number}] [FAIL] Завершено с ошибкой: {result.get('error', 'Unknown error')}")
 
     except Exception as e:
         print(f"[THREAD {thread_id}] [ERROR] Критическая ошибка: {e}")
         import traceback
         traceback.print_exc()
         result['error'] = str(e)
-
-        # Записываем ошибку
-        end_time = datetime.datetime.now().isoformat()
-        write_row_status(results_file_path, row_number, "error", start_time, end_time, error_msg=str(e), data_row=data_row)
-        print(f"[PROGRESS] Строка {row_number} отмечена как 'error': {e}")
 
     finally:
         if profile_uuid:
@@ -2485,15 +2410,14 @@ def main():
         print("[MAIN] [ERROR] Локальный Octobrowser недоступен!")
         return
 
-    # Загружаем CSV и получаем пути к файлам + отфильтрованные данные
-    csv_file_path, results_file_path, csv_data = load_csv_data()
+    # Загружаем CSV и получаем отфильтрованные данные
+    csv_file_path, fieldnames, csv_data = load_csv_data()
 
-    if not csv_file_path or not results_file_path:
+    if not csv_file_path or not fieldnames:
         print("[ERROR] Не удалось загрузить CSV файл")
         return
 
     print(f"[MAIN] CSV файл: {csv_file_path}")
-    print(f"[MAIN] Файл результатов: {results_file_path}")
     print(f"[MAIN] К обработке: {len(csv_data)} новых строк")
 
     if not csv_data:
@@ -2509,11 +2433,11 @@ def main():
     else:
         print(f"[MAIN] Лимит итераций: НЕТ (обрабатываем все строки)")
 
-    # Формируем задачи с учетом results_file_path
+    # Формируем задачи с новой системой (передаем csv_file_path и fieldnames)
     tasks = []
     for iteration_number, data_row in enumerate(csv_data, 1):
         thread_id = (iteration_number - 1) % THREADS_COUNT + 1
-        task_data = (thread_id, iteration_number, data_row, len(csv_data), results_file_path)
+        task_data = (thread_id, iteration_number, data_row, len(csv_data), csv_file_path, fieldnames)
         tasks.append(task_data)
 
     actual_threads = min(THREADS_COUNT, len(csv_data))
@@ -2531,10 +2455,10 @@ def main():
 
                 if result['success']:
                     success_count += 1
-                    print(f"[MAIN] [OK] Строка {result.get('row_number', result['iteration'])} завершена успешно")
+                    print(f"[MAIN] [OK] Итерация {result['iteration']} (CSV строка {result['csv_row']}) завершена успешно")
                 else:
                     fail_count += 1
-                    print(f"[MAIN] [ERROR] Строка {result.get('row_number', result['iteration'])} завершена с ошибкой")
+                    print(f"[MAIN] [ERROR] Итерация {result['iteration']} (CSV строка {result['csv_row']}) завершена с ошибкой")
 
             except Exception as e:
                 fail_count += 1
