@@ -1187,6 +1187,42 @@ def find_question_in_pool(question_text: str, pool: Dict, debug: bool = False) -
             print(f"[SEARCH] [OK] НАЙДЕНО (частичное, ratio={best_ratio:.2f}): '{best_match}'")
         return best_match
 
+    # ЖЕСТКОЕ РЕШЕНИЕ: Fallback поиск по ключевым словам (если fuzzy matching не сработал)
+    if debug:
+        print(f"[SEARCH] Fuzzy matching не нашел, пробую поиск по ключевым словам...")
+
+    # Извлекаем ключевые слова (слова длиной > 3 символов)
+    question_words = set([w for w in normalized_question.split() if len(w) > 3])
+
+    if debug:
+        print(f"[SEARCH] Ключевые слова в вопросе: {question_words}")
+
+    best_keyword_match = None
+    best_keyword_score = 0
+
+    for pool_key in pool.keys():
+        normalized_key = normalize_text(pool_key)
+        key_words = set([w for w in normalized_key.split() if len(w) > 3])
+
+        # Считаем процент совпадающих ключевых слов
+        if question_words and key_words:
+            common_words = question_words & key_words  # Пересечение
+            keyword_score = len(common_words) / len(question_words)  # Процент от вопроса
+
+            if debug and keyword_score > 0.3:
+                print(f"[SEARCH] Проверка '{pool_key[:60]}...': keyword_score={keyword_score:.2f}, common={common_words}")
+
+            # Если совпадает 40%+ ключевых слов - это кандидат
+            if keyword_score > 0.40:
+                if keyword_score > best_keyword_score:
+                    best_keyword_match = pool_key
+                    best_keyword_score = keyword_score
+
+    if best_keyword_match:
+        if debug:
+            print(f"[SEARCH] [OK] НАЙДЕНО (по ключевым словам, score={best_keyword_score:.2f}): '{best_keyword_match}'")
+        return best_keyword_match
+
     if debug:
         print(f"[SEARCH] [FAIL] НЕ НАЙДЕНО")
         print(f"[SEARCH] Доступные ключи в пуле (всего {len(pool)}):")
