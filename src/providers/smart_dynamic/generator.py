@@ -1263,10 +1263,16 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
 
                 # Получить текст вопроса с агрессивным retry (элемент может быть не готов)
                 question_text = ""
-                max_retries = 3
+                max_retries = 5  # Увеличено с 3 до 5 для максимальной стабильности
 
                 for attempt in range(max_retries):
                     try:
+                        # КРИТИЧНО: Скроллим к элементу чтобы он был в viewport
+                        heading.scroll_into_view_if_needed(timeout=2000)
+
+                        # Дополнительная пауза после скролла для рендеринга
+                        time.sleep(0.3)
+
                         question_text = heading.inner_text().strip()
 
                         # Если текст есть и не пустой - отлично
@@ -1275,11 +1281,11 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
 
                         # Если пустой и это не последняя попытка - ждем дольше
                         if attempt < max_retries - 1:
-                            wait_time = 1.0 * (attempt + 1)  # 1s, 2s, 3s
+                            wait_time = 1.5 * (attempt + 1)  # 1.5s, 3s, 4.5s, 6s
                             time.sleep(wait_time)
                     except Exception as e:
                         if attempt < max_retries - 1:
-                            time.sleep(1.0)
+                            time.sleep(1.5)
                         else:
                             pass  # Последняя попытка failed - пропускаем
 
