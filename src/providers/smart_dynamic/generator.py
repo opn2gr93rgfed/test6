@@ -564,13 +564,11 @@ _proxy_lock = threading.Lock()
 
 def rotate_proxy_for_port(port: int) -> bool:
     """
-    Обновить IP для конкретного порта через 9Proxy API
+    Ротация прокси для порта — получить НОВЫЙ IP
 
-    Args:
-        port: Локальный порт для обновления
-
-    Returns:
-        True если успешно, False если ошибка
+    Использует /api/proxy с параметром port= который автоматически:
+    1. Берёт новый IP из пула (НЕ из today_list!)
+    2. Привязывает его к указанному порту
     """
     if not NINE_PROXY_ENABLED:
         return False
@@ -578,10 +576,13 @@ def rotate_proxy_for_port(port: int) -> bool:
     try:
         import requests
 
-        # Подготовить параметры запроса с фильтрами
-        params = {'num': 1, 't': 2}
+        # Формируем параметры — port= это ключ!
+        params = {
+            'num': 1,
+            'port': port,  # Автоматически привязывает новый IP к этому порту
+            't': 2
+        }
 
-        # Добавить фильтры если они указаны
         if NINE_PROXY_COUNTRY:
             params['country'] = NINE_PROXY_COUNTRY
         if NINE_PROXY_STATE:
@@ -593,133 +594,30 @@ def rotate_proxy_for_port(port: int) -> bool:
         if NINE_PROXY_PLAN:
             params['plan'] = NINE_PROXY_PLAN
 
-        # Логирование запроса с фильтрами
-        filter_info = []
-        if NINE_PROXY_COUNTRY:
-            filter_info.append(f"country={NINE_PROXY_COUNTRY}")
-        if NINE_PROXY_STATE:
-            filter_info.append(f"state={NINE_PROXY_STATE}")
-        if NINE_PROXY_CITY:
-            filter_info.append(f"city={NINE_PROXY_CITY}")
-        if NINE_PROXY_ISP:
-            filter_info.append(f"isp={NINE_PROXY_ISP}")
-        if NINE_PROXY_PLAN:
-            filter_info.append(f"plan={NINE_PROXY_PLAN}")
+        print(f"[9PROXY] Ротация порта {port} -> запрос нового IP...")
 
-        filter_str = ", ".join(filter_info) if filter_info else "без фильтров"
-        print(f"[9PROXY] Запрос прокси для порта {port} ({filter_str})")
-
-        # Получить новый прокси из API с фильтрами
         response = requests.get(
             f"{NINE_PROXY_API_URL}/api/proxy",
             params=params,
-            timeout=5
+            timeout=10
         )
 
         if response.status_code != 200:
-            print(f"[9PROXY] [ERROR] Ошибка получения прокси: HTTP {response.status_code}")
-            print(f"[9PROXY] [DEBUG] Response text: {response.text[:200]}")
+            print(f"[9PROXY] [ERROR] HTTP {response.status_code}")
             return False
 
         data = response.json()
-        print(f"[9PROXY] [DEBUG] API response: {data}")
 
         if data.get('error'):
-            print(f"[9PROXY] [ERROR] API вернул ошибку: {data.get('error')}")
+            print(f"[9PROXY] [ERROR] {data.get('message')}")
             return False
 
-        if not data.get('data'):
-            print(f"[9PROXY] [ERROR] Нет доступных прокси с указанными фильтрами")
-            print(f"[9PROXY] [DEBUG] Full response: {data}")
-            return False
-
-        # 🔥 9Proxy API может возвращать либо строки '127.0.0.1:6000' либо объекты
-        proxy_data = data['data'][0]
-
-        # Проверяем тип данных
-        if isinstance(proxy_data, str):
-            # Строка формата '127.0.0.1:6000' - нужно получить реальный ID прокси
-            print(f"[9PROXY] [DEBUG] API вернул строку: {proxy_data}")
-            print(f"[9PROXY] [WARNING] Для ротации нужен ID прокси, пробую /api/today_list...")
-
-            # Получаем список прокси с ID через /api/today_list
-            try:
-                list_response = requests.get(
-                    f"{NINE_PROXY_API_URL}/api/today_list",
-                    params=params,
-                    timeout=5
-                )
-
-                if list_response.status_code == 200:
-                    list_data = list_response.json()
-                    print(f"[9PROXY] [DEBUG] today_list response: {list_data}")
-
-                    if list_data.get('data') and len(list_data['data']) > 0:
-                        proxy = list_data['data'][0]
-                        if isinstance(proxy, dict):
-                            proxy_id = proxy.get('id')
-                            proxy_ip = proxy.get('ip', 'unknown')
-                            proxy_country = proxy.get('country_code', 'unknown')
-                        else:
-                            print(f"[9PROXY] [ERROR] today_list тоже вернул строку вместо объекта")
-                            return False
-                    else:
-                        print(f"[9PROXY] [ERROR] today_list не вернул данных")
-                        return False
-                else:
-                    print(f"[9PROXY] [ERROR] today_list HTTP {list_response.status_code}")
-                    return False
-            except Exception as e:
-                print(f"[9PROXY] [ERROR] Ошибка при запросе today_list: {e}")
-                return False
-        else:
-            # Объект с полями id, ip, country_code
-            proxy = proxy_data
-            proxy_id = proxy.get('id')
-            proxy_ip = proxy.get('ip', 'unknown')
-            proxy_country = proxy.get('country_code', 'unknown')
-
-        if not proxy_id:
-            print(f"[9PROXY] [ERROR] Прокси не имеет ID")
-            return False
-
-        # Определить план для forward запроса
-        forward_plan = NINE_PROXY_PLAN if NINE_PROXY_PLAN else '2'  # default to free
-
-        # Переадресовать на наш порт
-        forward_params = {'id': proxy_id, 'port': port, 't': 2}
-        if forward_plan:
-            forward_params['plan'] = forward_plan
-
-        print(f"[9PROXY] [DEBUG] Forward request: {NINE_PROXY_API_URL}/api/forward?{forward_params}")
-
-        forward_response = requests.get(
-            f"{NINE_PROXY_API_URL}/api/forward",
-            params=forward_params,
-            timeout=5
-        )
-
-        print(f"[9PROXY] [DEBUG] Forward response status: {forward_response.status_code}")
-
-        if forward_response.status_code == 200:
-            forward_data = forward_response.json()
-            print(f"[9PROXY] [DEBUG] Forward response data: {forward_data}")
-
-            if not forward_data.get('error'):
-                print(f"[9PROXY] [OK] Порт {port} обновлен -> {proxy_ip} ({proxy_country}) [ID: {proxy_id}]")
-                return True
-            else:
-                print(f"[9PROXY] [ERROR] Forward ошибка: {forward_data.get('message')} | Full error: {forward_data.get('error')}")
-                return False
-        else:
-            print(f"[9PROXY] [ERROR] Ошибка forward: HTTP {forward_response.status_code}")
-            print(f"[9PROXY] [DEBUG] Forward response text: {forward_response.text[:200]}")
-            return False
+        result = data.get('data', [])
+        print(f"[9PROXY] [OK] Порт {port} -> новый IP назначен")
+        return True
 
     except Exception as e:
-        print(f"[9PROXY] [ERROR] Ошибка ротации порта {port}: {e}")
-        import traceback
-        traceback.print_exc()
+        print(f"[9PROXY] [ERROR] Ротация порта {port}: {e}")
         return False
 
 def get_nine_proxy_for_thread(thread_id: int) -> Optional[Dict]:
@@ -771,48 +669,64 @@ def get_nine_proxy_for_thread(thread_id: int) -> Optional[Dict]:
 
 def initialize_nine_proxy_ports() -> bool:
     """
-    Проверить доступность портов 9Proxy
+    Инициализация портов 9Proxy
 
-    9Proxy API возвращает готовые локальные порты (127.0.0.1:6000-6009),
-    которые УЖЕ переадресуют на реальные IP. Не нужно вручную назначать прокси.
-
-    Returns:
-        True если успешно, False если ошибка
+    Для каждого порта вызывает /api/proxy?port=X
+    который автоматически назначает новый IP
     """
     if not NINE_PROXY_ENABLED or not NINE_PROXY_PORTS:
         return True
 
-    print(f"[9PROXY INIT] Проверка {len(NINE_PROXY_PORTS)} портов...")
+    print(f"[9PROXY INIT] Инициализация {len(NINE_PROXY_PORTS)} портов...")
     print(f"[9PROXY INIT] API URL: {NINE_PROXY_API_URL}")
     print(f"[9PROXY INIT] Порты: {NINE_PROXY_PORTS}")
 
     try:
         import requests
 
-        # Просто проверим что API доступен
-        response = requests.get(
-            f"{NINE_PROXY_API_URL}/api/proxy",
-            params={'num': 1, 't': 2},
-            timeout=5
-        )
+        success_count = 0
 
-        if response.status_code == 200:
-            print(f"[9PROXY INIT] [OK] API доступен")
+        for port in NINE_PROXY_PORTS:
+            print(f"[9PROXY INIT] Настройка порта {port}...")
 
-            # Проинициализировать каждый порт с правильными фильтрами
-            print(f"[9PROXY INIT] Инициализация портов с фильтрами...")
-            for port in NINE_PROXY_PORTS:
-                print(f"[9PROXY INIT] Настройка порта {port}...")
-                rotate_proxy_for_port(port)
+            params = {
+                'num': 1,
+                'port': port,
+                't': 2
+            }
 
-            print(f"[9PROXY INIT] [OK] Все порты настроены")
-            return True
-        else:
-            print(f"[9PROXY INIT] [WARNING] API недоступен: HTTP {response.status_code}")
-            return False
+            if NINE_PROXY_COUNTRY:
+                params['country'] = NINE_PROXY_COUNTRY
+            if NINE_PROXY_STATE:
+                params['state'] = NINE_PROXY_STATE
+            if NINE_PROXY_CITY:
+                params['city'] = NINE_PROXY_CITY
+            if NINE_PROXY_ISP:
+                params['isp'] = NINE_PROXY_ISP
+            if NINE_PROXY_PLAN:
+                params['plan'] = NINE_PROXY_PLAN
+
+            response = requests.get(
+                f"{NINE_PROXY_API_URL}/api/proxy",
+                params=params,
+                timeout=10
+            )
+
+            if response.status_code == 200:
+                data = response.json()
+                if not data.get('error'):
+                    print(f"[9PROXY INIT] [OK] Порт {port} -> IP назначен")
+                    success_count += 1
+                else:
+                    print(f"[9PROXY INIT] [ERROR] Порт {port}: {data.get('message')}")
+            else:
+                print(f"[9PROXY INIT] [ERROR] Порт {port}: HTTP {response.status_code}")
+
+        print(f"[9PROXY INIT] Настроено портов: {success_count}/{len(NINE_PROXY_PORTS)}")
+        return success_count > 0
 
     except Exception as e:
-        print(f"[9PROXY INIT] [ERROR] Ошибка подключения к API: {e}")
+        print(f"[9PROXY INIT] [ERROR] {e}")
         return False
 
 '''
