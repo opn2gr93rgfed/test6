@@ -59,6 +59,7 @@ class Generator:
 
         threads_count = config.get('threads_count', 1)
         max_iterations = config.get('max_iterations', None)  # None = все строки CSV
+        disposable_profiles = config.get('disposable_profiles', False)  # Одноразовые профили
         network_capture_patterns = config.get('network_capture_patterns', [])
 
         # 🔥 9Proxy настройки
@@ -101,7 +102,8 @@ class Generator:
         script = self._generate_imports()
         script += self._generate_config(api_token, proxy_config, proxy_list_config, threads_count, max_iterations,
                                         nine_proxy_enabled, nine_proxy_api_url, nine_proxy_ports, nine_proxy_strategy, nine_proxy_auto_rotate,
-                                        nine_proxy_country, nine_proxy_state, nine_proxy_city, nine_proxy_isp, nine_proxy_plan)
+                                        nine_proxy_country, nine_proxy_state, nine_proxy_city, nine_proxy_isp, nine_proxy_plan,
+                                        disposable_profiles)
         script += self._generate_proxy_rotation()
         script += self._generate_nine_proxy_rotation()  # 🔥 9Proxy функция ротации
         script += self._generate_octobrowser_functions(profile_config)
@@ -453,7 +455,8 @@ from typing import Dict, List, Optional
                          nine_proxy_enabled: bool = False, nine_proxy_api_url: str = '', nine_proxy_ports: List = [],
                          nine_proxy_strategy: str = 'sequential', nine_proxy_auto_rotate: bool = True,
                          nine_proxy_country: str = '', nine_proxy_state: str = '', nine_proxy_city: str = '',
-                         nine_proxy_isp: str = '', nine_proxy_plan: str = 'all') -> str:
+                         nine_proxy_isp: str = '', nine_proxy_plan: str = 'all',
+                         disposable_profiles: bool = False) -> str:
         config = f'''# ============================================================
 # КОНФИГУРАЦИЯ
 # ============================================================
@@ -471,6 +474,9 @@ THREADS_COUNT = {threads_count}
 
 # Лимит итераций (None = обработать все строки CSV)
 MAX_ITERATIONS = {max_iterations if max_iterations is not None else 'None'}
+
+# Одноразовые профили (удалять после каждой итерации)
+DISPOSABLE_PROFILES = {disposable_profiles}
 
 # Lock для синхронизации записи в CSV файл (защита от race condition)
 csv_write_lock = threading.Lock()
@@ -1056,25 +1062,108 @@ def start_profile(profile_uuid: str) -> Optional[Dict]:
     return None
 
 
-def stop_profile(profile_uuid: str):
-    """Остановить профиль"""
-    url = f"{{LOCAL_API_URL}}/profiles/{{profile_uuid}}/stop"
+# ============================================================
+# ОСТАНОВКА И УДАЛЕНИЕ ПРОФИЛЕЙ
+# ============================================================
+
+def stop_profile(profile_uuid: str) -> bool:
+    """
+    Остановить профиль через Cloud API (force_stop)
+
+    Endpoint: POST /profiles/{{uuid}}/force_stop
+    """
+    if not profile_uuid:
+        return False
+
+    url = f"{{API_BASE_URL}}/profiles/{{profile_uuid}}/force_stop"
+    headers = {{
+        "Content-Type": "application/json",
+        "X-Octo-Api-Token": API_TOKEN
+    }}
+    body = {{"version": None}}
+
     try:
-        requests.get(url, timeout=10)
-        print(f"[PROFILE] [OK] Профиль остановлен")
-    except:
-        pass
+        response = requests.post(url, headers=headers, json=body, timeout=30)
+
+        if response.status_code == 200:
+            result = response.json()
+            if result.get('success'):
+                print(f"[PROFILE] ✅ Остановлен: {{profile_uuid[:8]}}...")
+                return True
+
+        # 409 = профиль уже остановлен (это ОК)
+        if response.status_code == 409:
+            print(f"[PROFILE] ℹ️ Профиль уже остановлен: {{profile_uuid[:8]}}...")
+            return True
+
+        print(f"[PROFILE] ⚠️ HTTP {{response.status_code}} при остановке")
+        return False
+
+    except Exception as e:
+        print(f"[PROFILE] ⚠️ Ошибка остановки: {{e}}")
+        return False
 
 
-def delete_profile(profile_uuid: str):
-    """Удалить профиль"""
-    url = f"{{API_BASE_URL}}/profiles/{{profile_uuid}}"
-    headers = {{"X-Octo-Api-Token": API_TOKEN}}
+def delete_profile(profile_uuid: str) -> bool:
+    """
+    Удалить профиль через Cloud API
+
+    Endpoint: DELETE /profiles с body {{"uuids": [...]}}
+    ВАЖНО: Метод DELETE, не POST!
+    """
+    if not profile_uuid:
+        return False
+
+    url = f"{{API_BASE_URL}}/profiles"
+    headers = {{
+        "Content-Type": "application/json",
+        "X-Octo-Api-Token": API_TOKEN
+    }}
+    body = {{"uuids": [profile_uuid]}}
+
     try:
-        requests.delete(url, headers=headers, timeout=10)
-        print(f"[PROFILE] [OK] Профиль удалён")
-    except:
-        pass
+        response = requests.delete(url, headers=headers, json=body, timeout=30)
+
+        if response.status_code == 200:
+            result = response.json()
+            if result.get('success'):
+                deleted = result.get('data', {{}}).get('deleted_uuids', [])
+                if profile_uuid in deleted:
+                    print(f"[PROFILE] 🗑️ Удалён: {{profile_uuid[:8]}}...")
+                    return True
+
+        print(f"[PROFILE] ❌ HTTP {{response.status_code}} при удалении")
+        return False
+
+    except Exception as e:
+        print(f"[PROFILE] ❌ Ошибка удаления: {{e}}")
+        return False
+
+
+def cleanup_profile(profile_uuid: str) -> bool:
+    """
+    Полная очистка профиля: остановка → пауза → удаление
+    """
+    if not profile_uuid:
+        return False
+
+    print(f"[CLEANUP] Очистка профиля {{profile_uuid[:8]}}...")
+
+    # 1. Остановка
+    stop_profile(profile_uuid)
+
+    # 2. Пауза для синхронизации
+    time.sleep(2)
+
+    # 3. Удаление
+    success = delete_profile(profile_uuid)
+
+    if success:
+        print(f"[CLEANUP] ✅ Профиль полностью очищен")
+    else:
+        print(f"[CLEANUP] ❌ Не удалось удалить профиль")
+
+    return success
 
 
 '''
@@ -2853,7 +2942,7 @@ def process_task(task_data: tuple) -> Dict:
         if not profile_uuid:
             result['error'] = "Profile creation failed"
             print(f"[THREAD {thread_id}] [ERROR] {result['error']}")
-            return result
+            raise Exception("Profile creation failed")
 
         print(f"[THREAD {thread_id}] Ожидание синхронизации (5 сек)...")
         time.sleep(5)
@@ -2862,13 +2951,13 @@ def process_task(task_data: tuple) -> Dict:
         if not start_data:
             result['error'] = "Profile start failed"
             print(f"[THREAD {thread_id}] [ERROR] {result['error']}")
-            return result
+            raise Exception("Profile start failed")
 
         debug_url = start_data.get('ws_endpoint')
         if not debug_url:
             result['error'] = "No CDP endpoint"
             print(f"[THREAD {thread_id}] [ERROR] {result['error']}")
-            return result
+            raise Exception("No CDP endpoint")
 
         with sync_playwright() as playwright:
             browser = playwright.chromium.connect_over_cdp(debug_url)
@@ -2888,8 +2977,6 @@ def process_task(task_data: tuple) -> Dict:
 
             time.sleep(2)
             browser.close()
-
-        stop_profile(profile_uuid)
 
         # 🔥 Ротация 9Proxy после завершения итерации
         if NINE_PROXY_ENABLED and NINE_PROXY_PORTS:
@@ -2922,8 +3009,20 @@ def process_task(task_data: tuple) -> Dict:
         result['error'] = str(e)
 
     finally:
+        # ═══════════════════════════════════════════════════════════
+        # ЭТОТ БЛОК ВЫПОЛНИТСЯ ВСЕГДА!
+        # ═══════════════════════════════════════════════════════════
         if profile_uuid:
-            time.sleep(1)
+            if DISPOSABLE_PROFILES:
+                print(f"[THREAD {thread_id}] 🗑️ Удаление одноразового профиля...")
+                if cleanup_profile(profile_uuid):
+                    print(f"[THREAD {thread_id}] ✅ Профиль удалён")
+                else:
+                    print(f"[THREAD {thread_id}] ❌ Не удалось удалить профиль")
+            else:
+                # Просто останавливаем, не удаляем
+                stop_profile(profile_uuid)
+                print(f"[THREAD {thread_id}] Профиль остановлен (сохранён)")
 
     return result
 
