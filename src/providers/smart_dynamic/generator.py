@@ -1088,19 +1088,19 @@ def stop_profile(profile_uuid: str) -> bool:
         if response.status_code == 200:
             result = response.json()
             if result.get('success'):
-                print(f"[PROFILE] ✅ Остановлен: {{profile_uuid[:8]}}...")
+                print(f"[PROFILE] [STOPPED] {{profile_uuid[:8]}}...")
                 return True
 
         # 409 = профиль уже остановлен (это ОК)
         if response.status_code == 409:
-            print(f"[PROFILE] ℹ️ Профиль уже остановлен: {{profile_uuid[:8]}}...")
+            print(f"[PROFILE] [INFO] Профиль уже остановлен: {{profile_uuid[:8]}}...")
             return True
 
-        print(f"[PROFILE] ⚠️ HTTP {{response.status_code}} при остановке")
+        print(f"[PROFILE] [WARN] HTTP {{response.status_code}} при остановке")
         return False
 
     except Exception as e:
-        print(f"[PROFILE] ⚠️ Ошибка остановки: {{e}}")
+        print(f"[PROFILE] [WARN] Ошибка остановки: {{e}}")
         return False
 
 
@@ -1129,14 +1129,14 @@ def delete_profile(profile_uuid: str) -> bool:
             if result.get('success'):
                 deleted = result.get('data', {{}}).get('deleted_uuids', [])
                 if profile_uuid in deleted:
-                    print(f"[PROFILE] 🗑️ Удалён: {{profile_uuid[:8]}}...")
+                    print(f"[PROFILE] [DELETED] {{profile_uuid[:8]}}...")
                     return True
 
-        print(f"[PROFILE] ❌ HTTP {{response.status_code}} при удалении")
+        print(f"[PROFILE] [ERROR] HTTP {{response.status_code}} при удалении")
         return False
 
     except Exception as e:
-        print(f"[PROFILE] ❌ Ошибка удаления: {{e}}")
+        print(f"[PROFILE] [ERROR] Ошибка удаления: {{e}}")
         return False
 
 
@@ -1159,9 +1159,9 @@ def cleanup_profile(profile_uuid: str) -> bool:
     success = delete_profile(profile_uuid)
 
     if success:
-        print(f"[CLEANUP] ✅ Профиль полностью очищен")
+        print(f"[CLEANUP] [OK] Профиль полностью очищен")
     else:
-        print(f"[CLEANUP] ❌ Не удалось удалить профиль")
+        print(f"[CLEANUP] [FAIL] Не удалось удалить профиль")
 
     return success
 
@@ -3014,15 +3014,15 @@ def process_task(task_data: tuple) -> Dict:
         # ═══════════════════════════════════════════════════════════
         if profile_uuid:
             if DISPOSABLE_PROFILES:
-                print(f"[THREAD {thread_id}] 🗑️ Удаление одноразового профиля...")
+                print(f"[THREAD {thread_id}] [DISPOSE] Удаление одноразового профиля...")
                 if cleanup_profile(profile_uuid):
-                    print(f"[THREAD {thread_id}] ✅ Профиль удалён")
+                    print(f"[THREAD {thread_id}] [OK] Профиль удален")
                 else:
-                    print(f"[THREAD {thread_id}] ❌ Не удалось удалить профиль")
+                    print(f"[THREAD {thread_id}] [FAIL] Не удалось удалить профиль")
             else:
                 # Просто останавливаем, не удаляем
                 stop_profile(profile_uuid)
-                print(f"[THREAD {thread_id}] Профиль остановлен (сохранён)")
+                print(f"[THREAD {thread_id}] Профиль остановлен (сохранен)")
 
     return result
 
