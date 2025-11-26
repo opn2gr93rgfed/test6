@@ -1285,7 +1285,9 @@ class ModernAppV3(ctk.CTk):
             self.append_log(f"[INFO] Генерация Playwright скрипта (Provider: {selected_provider})...", "INFO")
 
             try:
+                # Принудительная перезагрузка модуля (для применения изменений без перезапуска GUI)
                 generator_module = importlib.import_module(f"src.providers.{selected_provider}.generator")
+                importlib.reload(generator_module)  # Перезагрузить модуль с диска
                 generator = generator_module.Generator()
                 generated_script = generator.generate_script(user_code, config)
             except Exception as e:
