@@ -2923,9 +2923,14 @@ def process_task(task_data: tuple) -> Dict:
         print(f"[THREAD {thread_id}] Задержка запуска: {startup_delay}s (снижение нагрузки)")
         time.sleep(startup_delay)
 
-    # === ВАЖНО: Объявляем ВСЕ переменные ДО try блока ===
+    # ========================================
+    # ВАЖНО: Объявляем ВСЕ переменные ДО try!
+    # ========================================
     profile_uuid = None
-    browser = None  # Браузер Playwright (для закрытия в finally)
+    browser = None
+    context = None
+    page = None
+    playwright_instance = None
 
     result = {
         'thread_id': thread_id,
@@ -2962,36 +2967,26 @@ def process_task(task_data: tuple) -> Dict:
             print(f"[THREAD {thread_id}] [ERROR] {result['error']}")
             raise Exception("No CDP endpoint")
 
-        # Используем with контекст, но закрываем браузер вручную внутри try/finally
-        with sync_playwright() as pw:
-            try:
-                browser = pw.chromium.connect_over_cdp(debug_url)
-                context = browser.contexts[0]
-                page = context.pages[0]
+        # ========================================
+        # Создаем Playwright БЕЗ with (для доступа в finally)
+        # ========================================
+        playwright_instance = sync_playwright().start()
+        browser = playwright_instance.chromium.connect_over_cdp(debug_url)
+        context = browser.contexts[0]
+        page = context.pages[0]
 
-                page.set_default_timeout(DEFAULT_TIMEOUT)
-                page.set_default_navigation_timeout(NAVIGATION_TIMEOUT)
+        page.set_default_timeout(DEFAULT_TIMEOUT)
+        page.set_default_navigation_timeout(NAVIGATION_TIMEOUT)
 
-                # run_iteration теперь возвращает tuple (success, extracted_fields)
-                iteration_success, extracted_fields = run_iteration(page, data_row, iteration_number)
+        # run_iteration теперь возвращает tuple (success, extracted_fields)
+        iteration_success, extracted_fields = run_iteration(page, data_row, iteration_number)
 
-                if iteration_success:
-                    result['success'] = True
-                else:
-                    result['error'] = "Iteration failed"
+        if iteration_success:
+            result['success'] = True
+        else:
+            result['error'] = "Iteration failed"
 
-                time.sleep(2)
-
-            finally:
-                # КРИТИЧНО: Закрываем браузер ДО выхода из with контекста!
-                if browser is not None:
-                    try:
-                        browser.close()
-                        browser = None
-                        print(f"[THREAD {thread_id}] [OK] Браузер закрыт")
-                    except Exception as e:
-                        print(f"[THREAD {thread_id}] [WARN] Ошибка закрытия браузера: {e}")
-                        browser = None
+        time.sleep(2)
 
         # 🔥 Ротация 9Proxy после завершения итерации
         if NINE_PROXY_ENABLED and NINE_PROXY_PORTS:
@@ -3024,11 +3019,35 @@ def process_task(task_data: tuple) -> Dict:
         result['error'] = str(e)
 
     finally:
-        # ═══════════════════════════════════════════════════════════
+        # ========================================================
         # ЭТОТ БЛОК ВЫПОЛНИТСЯ ВСЕГДА!
-        # ═══════════════════════════════════════════════════════════
+        # Порядок: CDP close -> browser close -> stop -> delete
+        # ========================================================
 
-        # Очищаем профиль Octobrowser (браузер уже закрыт внутри with блока)
+        # 1. Закрыть браузер через CDP (гарантированно закрывает окно)
+        if context and page:
+            try:
+                cdp = context.new_cdp_session(page)
+                cdp.send("Browser.close")
+                print(f"[THREAD {thread_id}] [OK] Браузер закрыт через CDP")
+            except Exception as e:
+                print(f"[THREAD {thread_id}] [WARN] CDP close failed: {e}")
+
+        # 2. Закрыть соединение Playwright
+        if browser:
+            try:
+                browser.close()
+            except:
+                pass
+
+        # 3. Остановить Playwright instance
+        if playwright_instance:
+            try:
+                playwright_instance.stop()
+            except:
+                pass
+
+        # 4. Очистить профиль Octobrowser
         if profile_uuid:
             if DISPOSABLE_PROFILES:
                 print(f"[THREAD {thread_id}] [DISPOSE] Удаление одноразового профиля...")
