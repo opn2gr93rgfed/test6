@@ -2923,7 +2923,10 @@ def process_task(task_data: tuple) -> Dict:
         print(f"[THREAD {thread_id}] Задержка запуска: {startup_delay}s (снижение нагрузки)")
         time.sleep(startup_delay)
 
+    # === ВАЖНО: Объявляем ВСЕ переменные ДО try блока ===
     profile_uuid = None
+    browser = None  # Браузер Playwright (для закрытия в finally)
+
     result = {
         'thread_id': thread_id,
         'iteration': iteration_number,
@@ -2976,7 +2979,15 @@ def process_task(task_data: tuple) -> Dict:
                 result['error'] = "Iteration failed"
 
             time.sleep(2)
-            browser.close()
+
+            # Закрываем браузер внутри with блока
+            try:
+                browser.close()
+                browser = None  # Помечаем что уже закрыт
+                print(f"[THREAD {thread_id}] [OK] Браузер закрыт")
+            except Exception as e:
+                print(f"[THREAD {thread_id}] [WARN] Ошибка при закрытии браузера: {e}")
+                browser = None  # Все равно помечаем как закрытый
 
         # 🔥 Ротация 9Proxy после завершения итерации
         if NINE_PROXY_ENABLED and NINE_PROXY_PORTS:
@@ -3012,6 +3023,16 @@ def process_task(task_data: tuple) -> Dict:
         # ═══════════════════════════════════════════════════════════
         # ЭТОТ БЛОК ВЫПОЛНИТСЯ ВСЕГДА!
         # ═══════════════════════════════════════════════════════════
+
+        # 1. Сначала закрываем браузер (если ещё открыт)
+        if browser is not None:
+            try:
+                browser.close()
+                print(f"[THREAD {thread_id}] [OK] Браузер принудительно закрыт в finally")
+            except Exception as e:
+                print(f"[THREAD {thread_id}] [WARN] Не удалось закрыть браузер в finally: {e}")
+
+        # 2. Потом очищаем профиль
         if profile_uuid:
             if DISPOSABLE_PROFILES:
                 print(f"[THREAD {thread_id}] [DISPOSE] Удаление одноразового профиля...")
