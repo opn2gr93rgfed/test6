@@ -2926,7 +2926,6 @@ def process_task(task_data: tuple) -> Dict:
     # === ВАЖНО: Объявляем ВСЕ переменные ДО try блока ===
     profile_uuid = None
     browser = None  # Браузер Playwright (для закрытия в finally)
-    playwright = None  # Playwright контекст (для закрытия в finally)
 
     result = {
         'thread_id': thread_id,
@@ -2963,24 +2962,36 @@ def process_task(task_data: tuple) -> Dict:
             print(f"[THREAD {thread_id}] [ERROR] {result['error']}")
             raise Exception("No CDP endpoint")
 
-        # Создаем Playwright вручную (БЕЗ with контекста)
-        playwright = sync_playwright().start()
-        browser = playwright.chromium.connect_over_cdp(debug_url)
-        context = browser.contexts[0]
-        page = context.pages[0]
+        # Используем with контекст, но закрываем браузер вручную внутри try/finally
+        with sync_playwright() as pw:
+            try:
+                browser = pw.chromium.connect_over_cdp(debug_url)
+                context = browser.contexts[0]
+                page = context.pages[0]
 
-        page.set_default_timeout(DEFAULT_TIMEOUT)
-        page.set_default_navigation_timeout(NAVIGATION_TIMEOUT)
+                page.set_default_timeout(DEFAULT_TIMEOUT)
+                page.set_default_navigation_timeout(NAVIGATION_TIMEOUT)
 
-        # run_iteration теперь возвращает tuple (success, extracted_fields)
-        iteration_success, extracted_fields = run_iteration(page, data_row, iteration_number)
+                # run_iteration теперь возвращает tuple (success, extracted_fields)
+                iteration_success, extracted_fields = run_iteration(page, data_row, iteration_number)
 
-        if iteration_success:
-            result['success'] = True
-        else:
-            result['error'] = "Iteration failed"
+                if iteration_success:
+                    result['success'] = True
+                else:
+                    result['error'] = "Iteration failed"
 
-        time.sleep(2)
+                time.sleep(2)
+
+            finally:
+                # КРИТИЧНО: Закрываем браузер ДО выхода из with контекста!
+                if browser is not None:
+                    try:
+                        browser.close()
+                        browser = None
+                        print(f"[THREAD {thread_id}] [OK] Браузер закрыт")
+                    except Exception as e:
+                        print(f"[THREAD {thread_id}] [WARN] Ошибка закрытия браузера: {e}")
+                        browser = None
 
         # 🔥 Ротация 9Proxy после завершения итерации
         if NINE_PROXY_ENABLED and NINE_PROXY_PORTS:
@@ -3017,23 +3028,7 @@ def process_task(task_data: tuple) -> Dict:
         # ЭТОТ БЛОК ВЫПОЛНИТСЯ ВСЕГДА!
         # ═══════════════════════════════════════════════════════════
 
-        # 1. Закрываем браузер Playwright
-        if browser is not None:
-            try:
-                browser.close()
-                print(f"[THREAD {thread_id}] [OK] Браузер закрыт в finally")
-            except Exception as e:
-                print(f"[THREAD {thread_id}] [WARN] Ошибка закрытия браузера: {e}")
-
-        # 2. Останавливаем Playwright контекст
-        if playwright is not None:
-            try:
-                playwright.stop()
-                print(f"[THREAD {thread_id}] [OK] Playwright остановлен")
-            except Exception as e:
-                print(f"[THREAD {thread_id}] [WARN] Ошибка остановки Playwright: {e}")
-
-        # 3. Очищаем профиль Octobrowser
+        # Очищаем профиль Octobrowser (браузер уже закрыт внутри with блока)
         if profile_uuid:
             if DISPOSABLE_PROFILES:
                 print(f"[THREAD {thread_id}] [DISPOSE] Удаление одноразового профиля...")
