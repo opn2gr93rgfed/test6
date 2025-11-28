@@ -106,6 +106,8 @@ class Generator:
         scroll_behavior = humanize_config.get('scroll_behavior', 'smooth')
         make_typos = humanize_config.get('make_typos', True)
         typo_rate = humanize_config.get('typo_rate', 0.05)
+        page_exploration_enabled = humanize_config.get('page_exploration_enabled', True)
+        exploration_intensity = humanize_config.get('exploration_intensity', 'normal')
 
         # 🔥 Сохраняем humanize_enabled для использования в _add_error_handling_to_actions
         self._humanize_enabled = humanize_enabled
@@ -117,7 +119,8 @@ class Generator:
         script += self._generate_config(api_token, proxy_config, proxy_list_config, threads_count, max_iterations,
                                         nine_proxy_enabled, nine_proxy_api_url, nine_proxy_ports, nine_proxy_strategy, nine_proxy_auto_rotate,
                                         nine_proxy_country, nine_proxy_state, nine_proxy_city, nine_proxy_isp, nine_proxy_plan,
-                                        disposable_profiles, humanize_enabled, typing_speed, mouse_speed, scroll_behavior, make_typos, typo_rate)
+                                        disposable_profiles, humanize_enabled, typing_speed, mouse_speed, scroll_behavior, make_typos, typo_rate,
+                                        page_exploration_enabled, exploration_intensity, humanize_config)
         script += self._generate_proxy_rotation()
         script += self._generate_nine_proxy_rotation()  # 🔥 9Proxy функция ротации
         script += self._generate_octobrowser_functions(profile_config)
@@ -476,7 +479,9 @@ from typing import Dict, List, Optional
                          nine_proxy_isp: str = '', nine_proxy_plan: str = 'all',
                          disposable_profiles: bool = False,
                          humanize_enabled: bool = True, typing_speed: str = 'normal', mouse_speed: str = 'normal',
-                         scroll_behavior: str = 'smooth', make_typos: bool = True, typo_rate: float = 0.05) -> str:
+                         scroll_behavior: str = 'smooth', make_typos: bool = True, typo_rate: float = 0.05,
+                         page_exploration_enabled: bool = True, exploration_intensity: str = 'normal',
+                         humanize_config: Dict = {}) -> str:
         config = f'''# ============================================================
 # КОНФИГУРАЦИЯ
 # ============================================================
@@ -581,6 +586,10 @@ _proxy_lock = threading.Lock()
         mouse_speed_map = {'slow': 20, 'normal': 10, 'fast': 5}
         mouse_delay = mouse_speed_map.get(mouse_speed, 10)
 
+        # Извлекаем настройки page_exploration из humanize_config
+        page_exploration_enabled = humanize_config.get('page_exploration_enabled', True)
+        exploration_intensity = humanize_config.get('exploration_intensity', 'normal')
+
         config += f'''# 🔥 Humanize - человекоподобное поведение (антидетект)
 HUMANIZE_ENABLED = {humanize_enabled}
 TYPING_SPEED = "{typing_speed}"  # slow/normal/fast
@@ -591,6 +600,8 @@ MOUSE_DELAY = {mouse_delay}  # Задержка между точками тра
 SCROLL_BEHAVIOR = "{scroll_behavior}"  # smooth/instant
 MAKE_TYPOS = {make_typos}  # Случайные опечатки
 TYPO_RATE = {typo_rate}  # Шанс опечатки (0.05 = 5%)
+PAGE_EXPLORATION_ENABLED = {page_exploration_enabled}  # Изучение страницы перед заполнением
+EXPLORATION_INTENSITY = "{exploration_intensity}"  # light/normal/thorough
 
 '''
         return config
@@ -1619,6 +1630,150 @@ def human_scroll_to(page, selector: str, by_role: str = None, name: str = None):
         print(f'[HUMANIZE] [ERROR] human_scroll_to: {e}')
 
 
+def explore_page(page):
+    """
+    Имитация ознакомления со страницей (как настоящий человек)
+
+    🎯 Что делает настоящий человек на новой странице:
+    - Читает заголовки и важную информацию
+    - Скроллит вверх-вниз чтобы увидеть весь контент
+    - Наводит мышь на интересные элементы
+    - Делает паузы для "чтения" текста
+    - Иногда переходит по ссылке и возвращается назад
+
+    ❌ БЕЗ explore_page: бот моментально начинает заполнять форму (ПАЛЕВО!)
+    ✅ С explore_page: бот ведет себя как реальный пользователь
+
+    Использование:
+        # После загрузки страницы или перехода по ссылке
+        page.goto("https://example.com")
+        explore_page(page)  # Изучаем страницу перед действиями
+
+        # Теперь можно заполнять форму
+        page.get_by_role("textbox", name="Name").fill("John")
+    """
+    if not HUMANIZE_ENABLED or not PAGE_EXPLORATION_ENABLED:
+        return
+
+    print("[HUMANIZE] 🔍 Ознакомление со страницей...")
+
+    try:
+        # 1. Небольшая пауза после загрузки страницы (как будто смотрим что загрузилось)
+        human_delay(800, 2000)
+
+        # 2. Прокручиваем до начала страницы (если были где-то в середине)
+        try:
+            page.evaluate('window.scrollTo(0, 0)')
+        except:
+            pass
+        human_delay(300, 700)
+
+        # 3. Читаем заголовки (H1, H2, H3) - как настоящий человек
+        try:
+            headings = page.locator('h1, h2, h3').all()
+            headings_to_read = min(len(headings), random.randint(3, 7))  # Читаем 3-7 заголовков
+
+            for i in range(headings_to_read):
+                try:
+                    heading = headings[i]
+                    if heading.is_visible(timeout=1000):
+                        # Наводим мышь на заголовок
+                        heading.hover(timeout=2000)
+
+                        # Пауза для "чтения" (зависит от длины текста)
+                        try:
+                            text = heading.inner_text()
+                            text_length = len(text)
+                            # 30-50 мс на символ, минимум 500мс, максимум 4000мс
+                            reading_time = max(500, min(text_length * random.uniform(30, 50), 4000))
+                            time.sleep(reading_time / 1000.0)
+                        except:
+                            human_delay(800, 1500)
+                except:
+                    continue
+        except:
+            pass
+
+        # 4. Скроллинг вверх-вниз (изучение страницы)
+        scroll_actions = random.randint(3, 6)  # Делаем 3-6 скроллов
+
+        for _ in range(scroll_actions):
+            # Случайное направление скролла
+            direction = random.choice(['down', 'down', 'down', 'up'])  # Чаще вниз
+            distance = random.randint(150, 500)
+
+            try:
+                if direction == 'down':
+                    page.mouse.wheel(0, distance)
+                else:
+                    page.mouse.wheel(0, -distance)
+            except:
+                pass
+
+            # Пауза для "изучения" контента
+            human_delay(800, 2000)
+
+        # 5. Наведение мыши на интерактивные элементы (кнопки, ссылки, инпуты)
+        try:
+            interactive = page.locator('button, a[href], input, label').all()
+            hover_count = random.randint(2, 5)  # Наводим на 2-5 элементов
+
+            if len(interactive) > 0:
+                # Выбираем случайные элементы
+                elements_to_hover = random.sample(interactive, min(hover_count, len(interactive)))
+
+                for element in elements_to_hover:
+                    try:
+                        if element.is_visible(timeout=1000):
+                            # Сначала двигаем мышь к элементу
+                            element.hover(timeout=2000)
+                            # Небольшая пауза (как будто читаем текст кнопки/ссылки)
+                            human_delay(300, 900)
+                    except:
+                        continue
+        except:
+            pass
+
+        # 6. Иногда "случайный клик" на ссылку и возврат назад (15% шанс)
+        if random.random() < 0.15:
+            try:
+                # Ищем ссылки которые НЕ ведут на внешние сайты и НЕ открывают новые окна
+                links = page.locator('a[href]:not([target="_blank"]):not([href^="http://"]):not([href^="https://"])').all()
+
+                if len(links) > 0:
+                    random_link = random.choice(links)
+                    if random_link.is_visible(timeout=1000):
+                        print("[HUMANIZE] 🔗 Случайный переход по внутренней ссылке...")
+                        random_link.click(timeout=3000)
+
+                        # Ждем загрузки новой страницы
+                        human_delay(1500, 3000)
+
+                        # Возвращаемся назад
+                        print("[HUMANIZE] ⬅️ Возврат на предыдущую страницу...")
+                        page.go_back()
+                        human_delay(800, 1500)
+            except:
+                # Если что-то пошло не так - просто пропускаем
+                pass
+
+        # 7. Финальный скролл к началу страницы (готовимся заполнять форму)
+        try:
+            page.mouse.wheel(0, -9999)  # Скроллим максимально вверх
+        except:
+            try:
+                page.evaluate('window.scrollTo(0, 0)')
+            except:
+                pass
+
+        human_delay(500, 1200)
+
+        print("[HUMANIZE] ✅ Ознакомление со страницей завершено")
+
+    except Exception as e:
+        print(f'[HUMANIZE] [ERROR] explore_page: {e}')
+
+
 '''
 
     def _generate_csv_loader(self) -> str:
@@ -2480,6 +2635,16 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
         # НАЧАЛЬНЫЕ ДЕЙСТВИЯ (до вопросов)
         # ============================================================
 {self._indent_code(pre_code_clean, 8)}
+
+        # ============================================================
+        # ОЗНАКОМЛЕНИЕ СО СТРАНИЦЕЙ (как настоящий человек)
+        # ============================================================
+        # 🔍 Реальный человек ВСЕГДА сначала изучает страницу перед заполнением:
+        # - Читает заголовки и инструкции
+        # - Скроллит вверх-вниз чтобы понять что от него хотят
+        # - Наводит мышь на элементы формы
+        # - Делает паузы для "чтения"
+        explore_page(page)
 
         # ============================================================
         # ДИНАМИЧЕСКИЙ ОТВЕТ НА ВОПРОСЫ

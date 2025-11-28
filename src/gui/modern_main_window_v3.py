@@ -850,6 +850,44 @@ class ModernAppV3(ctk.CTk):
         )
         scroll_behavior_menu.grid(row=7, column=5, padx=(2, 15), pady=5, sticky="w")
 
+        # Humanize - строка 3 (изучение страницы)
+        self.page_exploration_enabled_var = tk.BooleanVar(value=True)
+        page_exploration_checkbox = ctk.CTkCheckBox(
+            timeouts_frame,
+            text="🔍 Изучение страницы",
+            variable=self.page_exploration_enabled_var,
+            font=(ModernTheme.FONT['family'], 10),
+            text_color=self.theme['text_secondary'],
+            fg_color=self.theme['accent_primary']
+        )
+        page_exploration_checkbox.grid(row=8, column=0, columnspan=2, padx=(15, 5), pady=5, sticky="w")
+
+        ctk.CTkLabel(
+            timeouts_frame,
+            text="Интенсивность:",
+            font=(ModernTheme.FONT['family'], 10),
+            text_color=self.theme['text_secondary']
+        ).grid(row=8, column=2, padx=(10, 2), pady=5, sticky="e")
+
+        self.exploration_intensity_var = tk.StringVar(value="normal")
+        exploration_intensity_menu = ctk.CTkOptionMenu(
+            timeouts_frame,
+            variable=self.exploration_intensity_var,
+            values=["light", "normal", "thorough"],
+            width=100,
+            font=(ModernTheme.FONT['family'], 10),
+            fg_color=self.theme['bg_tertiary'],
+            button_color=self.theme['accent_primary']
+        )
+        exploration_intensity_menu.grid(row=8, column=3, columnspan=2, padx=(2, 10), pady=5, sticky="w")
+
+        ctk.CTkLabel(
+            timeouts_frame,
+            text="(скроллинг, чтение заголовков, hover)",
+            font=(ModernTheme.FONT['family'], 9),
+            text_color=self.theme['text_secondary']
+        ).grid(row=8, column=5, padx=(0, 15), pady=5, sticky="w")
+
         # 🗑️ Одноразовые профили
         disposable_profiles_checkbox = ctk.CTkCheckBox(
             timeouts_frame,
@@ -860,7 +898,7 @@ class ModernAppV3(ctk.CTk):
             fg_color=self.theme['accent_error'],
             hover_color=self.theme['accent_warning']
         )
-        disposable_profiles_checkbox.grid(row=8, column=0, columnspan=3, padx=(15, 5), pady=(10, 10), sticky="w")
+        disposable_profiles_checkbox.grid(row=9, column=0, columnspan=3, padx=(15, 5), pady=(10, 10), sticky="w")
 
         ctk.CTkLabel(
             timeouts_frame,
@@ -1365,7 +1403,9 @@ class ModernAppV3(ctk.CTk):
                     'mouse_speed': self.mouse_speed_var.get(),
                     'scroll_behavior': self.scroll_behavior_var.get(),
                     'make_typos': self.make_typos_var.get(),
-                    'typo_rate': float(self.typo_rate_var.get()) if self.typo_rate_var.get().replace('.', '', 1).isdigit() else 0.05
+                    'typo_rate': float(self.typo_rate_var.get()) if self.typo_rate_var.get().replace('.', '', 1).isdigit() else 0.05,
+                    'page_exploration_enabled': self.page_exploration_enabled_var.get(),
+                    'exploration_intensity': self.exploration_intensity_var.get()
                 }
             }
 
