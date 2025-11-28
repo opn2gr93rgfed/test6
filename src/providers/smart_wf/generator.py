@@ -1381,11 +1381,12 @@ def human_delay(min_ms: float, max_ms: float):
 
 def human_type(page, selector: str, text: str, by_role: str = None, name: str = None):
     """
-    Человекоподобный ввод текста с рандомизацией
+    Человекоподобный ввод текста с РЕАЛИСТИЧНОЙ рандомизацией
 
-    Особенности:
-    - Задержка между символами: нормальное распределение (среднее TYPING_DELAY_MEAN мс)
-    - Дополнительная пауза после пробела: 50-150 мс
+    Особенности (основано на реальных данных пользователя):
+    - Базовая задержка: 90-450 мс (среднее ~200мс)
+    - Длинные паузы "думания": 1000-3500 мс (7% шанс)
+    - Пауза после пробела: 200-900 мс
     - Случайные "ошибки" с исправлением (TYPO_RATE шанс)
     - Пауза перед началом ввода: 200-500 мс
 
@@ -1406,9 +1407,9 @@ def human_type(page, selector: str, text: str, by_role: str = None, name: str = 
 
     # Находим элемент
     if by_role:
-        element = page.get_by_role(by_role, name=name)
+        element = page.get_by_role(by_role, name=name).first
     else:
-        element = page.locator(selector)
+        element = page.locator(selector).first
 
     # Очищаем поле
     element.click()
@@ -1438,13 +1439,21 @@ def human_type(page, selector: str, text: str, by_role: str = None, name: str = 
         # Вводим правильный символ
         element.type(char)
 
-        # Задержка между символами (нормальное распределение)
-        delay = max(0, random.gauss(TYPING_DELAY_MEAN, TYPING_DELAY_STD))
-        time.sleep(delay / 1000.0)
+        # РЕАЛИСТИЧНАЯ задержка между символами
+        # 7% шанс длинной паузы "думания" (1-3.5 сек)
+        if random.random() < 0.07:
+            delay = random.uniform(1000, 3500)
+            time.sleep(delay / 1000.0)
+        # Обычная задержка (90-450мс, большинство 100-300мс)
+        else:
+            # Используем треугольное распределение для более естественных задержек
+            # Пик на 200мс, но возможны как быстрые (90мс) так и медленные (450мс)
+            delay = random.triangular(90, 450, 200)
+            time.sleep(delay / 1000.0)
 
-        # Дополнительная пауза после пробела
+        # Дополнительная пауза после пробела (200-900мс)
         if char == ' ':
-            human_delay(50, 150)
+            human_delay(200, 900)
 
 
 def human_move_to(page, selector: str, by_role: str = None, name: str = None):
@@ -2062,7 +2071,12 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
                                 button_text = action.get('value')
                                 print(f"[DYNAMIC_QA]   -> Кликаю кнопку: {button_text}")
                                 page.get_by_role("button", name=button_text).click(timeout=10000)
-                                time.sleep(__ACTION_DELAY__)
+
+                                # 🤖 HUMANIZE: Добавляем задержку после клика
+                                if HUMANIZE_ENABLED:
+                                    human_delay(300, 800)
+                                else:
+                                    time.sleep(__ACTION_DELAY__)
 
                             # Заполнение текстового поля
                             elif action_type == 'textbox_fill':
@@ -2073,10 +2087,16 @@ def answer_questions(page, data_row: Dict, max_questions: int = 100):
                                 value = data_row.get(data_key, static_value) if data_key else static_value
 
                                 print(f"[DYNAMIC_QA]   -> Заполняю поле '{field_name}': {value}")
-                                textbox = page.get_by_role("textbox", name=field_name).first
-                                textbox.click(timeout=5000)
-                                textbox.press_sequentially(value, delay=__TYPING_DELAY__)
-                                time.sleep(__ACTION_DELAY__)
+
+                                # 🤖 HUMANIZE: Используем человекоподобный ввод
+                                if HUMANIZE_ENABLED:
+                                    human_type(page, None, value, by_role="textbox", name=field_name)
+                                    human_delay(500, 1500)  # Задержка после ввода
+                                else:
+                                    textbox = page.get_by_role("textbox", name=field_name).first
+                                    textbox.click(timeout=5000)
+                                    textbox.press_sequentially(value, delay=__TYPING_DELAY__)
+                                    time.sleep(__ACTION_DELAY__)
 
                             # Нажатие клавиши
                             elif action_type == 'press_key':
