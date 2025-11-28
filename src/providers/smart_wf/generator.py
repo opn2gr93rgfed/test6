@@ -2574,7 +2574,7 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
             added_delay = False
 
             # 1. Заменяем .fill() на human_type()
-            # Паттерны: page.fill("#id", "text"), page.locator("#id").fill("text"), page.get_by_role(...).fill("text")
+            # Поддерживаем все паттерны Playwright
             if '.fill(' in stripped:
                 # Извлекаем селектор и текст
                 # Паттерн 1: page.fill("selector", "text")
@@ -2583,6 +2583,10 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
                 match2 = re.search(r'(\w+)\.locator\(["\']([^"\']+)["\']\)\.fill\((.+)\)', stripped)
                 # Паттерн 3: page.get_by_role("role", name="name").fill("text")
                 match3 = re.search(r'(\w+)\.get_by_role\(["\'](\w+)["\']\s*,\s*name=["\']([^"\']+)["\']\)\.fill\((.+)\)', stripped)
+                # Паттерн 4: page.get_by_test_id("test-id").fill("text")  # ← НОВЫЙ!
+                match4 = re.search(r'(\w+)\.get_by_test_id\(["\']([^"\']+)["\']\)\.fill\((.+)\)', stripped)
+                # Паттерн 5: page.get_by_label("label").fill("text")  # ← НОВЫЙ!
+                match5 = re.search(r'(\w+)\.get_by_label\(["\']([^"\']+)["\']\)\.fill\((.+)\)', stripped)
 
                 if match1:
                     page_var = match1.group(1)
@@ -2602,6 +2606,23 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
                     name = match3.group(3)
                     text = match3.group(4)
                     modified_line = f'{indent_str}human_type({page_var}, None, {text}, by_role="{role}", name="{name}")'
+                    added_delay = True
+                elif match4:
+                    # Для get_by_test_id создаем CSS селектор [data-testid="..."]
+                    page_var = match4.group(1)
+                    test_id = match4.group(2)
+                    text = match4.group(3)
+                    selector = f'[data-testid=\\"{test_id}\\"]'
+                    modified_line = f'{indent_str}human_type({page_var}, "{selector}", {text})'
+                    added_delay = True
+                elif match5:
+                    # Для get_by_label пытаемся использовать label как селектор
+                    page_var = match5.group(1)
+                    label = match5.group(2)
+                    text = match5.group(3)
+                    # Используем CSS селектор по label
+                    selector = f'label:has-text(\\"{label}\\") ~ input, label:has-text(\\"{label}\\") input'
+                    modified_line = f'{indent_str}human_type({page_var}, "{selector}", {text})'
                     added_delay = True
 
             # 2. Заменяем .click() на human_move_to() + .click() (опционально)
