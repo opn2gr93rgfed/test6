@@ -148,23 +148,25 @@ class Generator:
             if not stripped or stripped.startswith('import ') or stripped.startswith('from '):
                 continue
 
-            # 🔥 Улучшенное пропускание boilerplate
-            # Пропускаем всё до первого реального действия (page.goto, page.get_by_role, etc)
+            # 🔥 Паттерны boilerplate которые ВСЕГДА пропускаем (в любом месте кода)
+            boilerplate_patterns = [
+                'def run(',
+                'browser = playwright.',
+                'context = browser.',
+                'page = context.',
+                'with sync_playwright()',
+                'run(playwright)',  # Вызов функции run в конце
+                'with page.context.expect_page()',  # Playwright recorder boilerplate
+                '.close()',
+                '# -----------'  # Разделители из Playwright recorder
+            ]
+
+            # Всегда пропускаем boilerplate строки
+            if any(pattern in stripped for pattern in boilerplate_patterns):
+                continue
+
+            # 🔥 Пропускаем всё до первого реального действия
             if skip_boilerplate:
-                # Паттерны boilerplate которые всегда нужно пропускать
-                boilerplate_patterns = [
-                    'def run(',
-                    'browser = playwright.',
-                    'context = browser.',
-                    'page = context.',
-                    'with sync_playwright()',
-                    '.close()'
-                ]
-
-                # Пропускаем если это boilerplate
-                if any(pattern in stripped for pattern in boilerplate_patterns):
-                    continue
-
                 # Список паттернов которые означают начало реального кода
                 real_code_patterns = [
                     'page.goto(',
@@ -181,7 +183,7 @@ class Generator:
                 if any(pattern in stripped for pattern in real_code_patterns):
                     skip_boilerplate = False
                 else:
-                    # Пропускаем эту строку (это boilerplate)
+                    # Пропускаем эту строку (это начальный boilerplate)
                     continue
 
             # Отслеживание popup окон - переключаем в post_section
