@@ -2572,10 +2572,12 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
 
             modified_line = line
             added_delay = False
+            is_action = False
 
             # 1. Заменяем .fill() на human_type()
             # Поддерживаем все паттерны Playwright
             if '.fill(' in stripped:
+                is_action = True
                 # Извлекаем селектор и текст
                 # Паттерн 1: page.fill("selector", "text")
                 match1 = re.search(r'(\w+)\.fill\(["\']([^"\']+)["\']\s*,\s*(.+)\)', stripped)
@@ -2625,19 +2627,54 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
                     modified_line = f'{indent_str}human_type({page_var}, "{selector}", {text})'
                     added_delay = True
 
-            # 2. Заменяем .click() на human_move_to() + .click() (опционально)
-            # Пока не добавляем, т.к. может быть слишком медленно
-            # Можно добавить позже как опцию
+            # 2. Добавляем human_move_to() перед кликами для реалистичного движения мыши
+            elif '.click()' in stripped and not '#' in stripped:
+                is_action = True
+
+                # Извлекаем информацию об элементе для human_move_to
+                # Паттерн 1: page.get_by_test_id("test-id").click()
+                move_match1 = re.search(r'(\w+)\.get_by_test_id\(["\']([^"\']+)["\']\)\.click\(\)', stripped)
+                # Паттерн 2: page.get_by_role("role", name="name").click()
+                move_match2 = re.search(r'(\w+)\.get_by_role\(["\'](\w+)["\']\s*,\s*name=["\']([^"\']+)["\']\)\.click\(\)', stripped)
+                # Паттерн 3: page.get_by_label("label").click()
+                move_match3 = re.search(r'(\w+)\.get_by_label\(["\']([^"\']+)["\']\)\.click\(\)', stripped)
+                # Паттерн 4: page.locator("selector").click()
+                move_match4 = re.search(r'(\w+)\.locator\(["\']([^"\']+)["\']\)\.click\(\)', stripped)
+
+                # Добавляем human_move_to ПЕРЕД кликом
+                if move_match1:
+                    page_var = move_match1.group(1)
+                    test_id = move_match1.group(2)
+                    selector = f'[data-testid=\\"{test_id}\\"]'
+                    result_lines.append(f'{indent_str}human_move_to({page_var}, "{selector}")')
+                elif move_match2:
+                    page_var = move_match2.group(1)
+                    role = move_match2.group(2)
+                    name = move_match2.group(3)
+                    result_lines.append(f'{indent_str}human_move_to({page_var}, None, by_role="{role}", name="{name}")')
+                elif move_match3:
+                    page_var = move_match3.group(1)
+                    label = move_match3.group(2)
+                    selector = f'label:has-text(\\"{label}\\") ~ input, label:has-text(\\"{label}\\") input'
+                    result_lines.append(f'{indent_str}human_move_to({page_var}, "{selector}")')
+                elif move_match4:
+                    page_var = move_match4.group(1)
+                    selector = move_match4.group(2)
+                    result_lines.append(f'{indent_str}human_move_to({page_var}, "{selector}")')
+
+                # Клик остается как есть
+                modified_line = line
 
             result_lines.append(modified_line)
 
             # 3. Добавляем human_delay() после действий
-            if added_delay:
-                # Используем диапазон 300-800мс для задержки после ввода текста
-                result_lines.append(f'{indent_str}human_delay(300, 800)')
-            elif '.click()' in stripped and not '#' in stripped:
-                # Добавляем задержку после кликов
-                result_lines.append(f'{indent_str}human_delay(300, 800)')
+            if is_action:
+                if added_delay or '.fill(' in stripped:
+                    # После ввода текста - большая задержка
+                    result_lines.append(f'{indent_str}human_delay(500, 1500)')
+                elif '.click()' in stripped:
+                    # После клика - средняя задержка
+                    result_lines.append(f'{indent_str}human_delay(300, 800)')
 
         return '\n'.join(result_lines)
 
