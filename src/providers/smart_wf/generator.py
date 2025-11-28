@@ -107,6 +107,9 @@ class Generator:
         make_typos = humanize_config.get('make_typos', True)
         typo_rate = humanize_config.get('typo_rate', 0.05)
 
+        # 🔥 Сохраняем humanize_enabled для использования в _add_error_handling_to_actions
+        self._humanize_enabled = humanize_enabled
+
         # ПАРСИНГ: Извлекаем вопросы и действия из user_code
         questions_pool, pre_questions_code, post_questions_code = self._parse_user_code(user_code)
 
@@ -2522,6 +2525,81 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
         # Применяем обработку ошибок для resilience (особенно важно для post_questions_code)
         return self._add_error_handling_to_actions(cleaned_code)
 
+    def _apply_humanize_transformations(self, code: str) -> str:
+        """
+        Применяет humanize трансформации к коду:
+        - Заменяет .fill() на human_type()
+        - Добавляет human_delay() между действиями
+        - Заменяет .click() на human_move_to() + .click()
+        """
+        import re
+
+        if not code or not code.strip():
+            return code
+
+        lines = code.split('\n')
+        result_lines = []
+
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            indent = len(line) - len(line.lstrip())
+            indent_str = ' ' * indent
+
+            # Пропускаем пустые строки и комментарии
+            if not stripped or stripped.startswith('#'):
+                result_lines.append(line)
+                continue
+
+            modified_line = line
+            added_delay = False
+
+            # 1. Заменяем .fill() на human_type()
+            # Паттерны: page.fill("#id", "text"), page.locator("#id").fill("text"), page.get_by_role(...).fill("text")
+            if '.fill(' in stripped:
+                # Извлекаем селектор и текст
+                # Паттерн 1: page.fill("selector", "text")
+                match1 = re.search(r'(\w+)\.fill\(["\']([^"\']+)["\']\s*,\s*(.+)\)', stripped)
+                # Паттерн 2: page.locator("selector").fill("text")
+                match2 = re.search(r'(\w+)\.locator\(["\']([^"\']+)["\']\)\.fill\((.+)\)', stripped)
+                # Паттерн 3: page.get_by_role("role", name="name").fill("text")
+                match3 = re.search(r'(\w+)\.get_by_role\(["\'](\w+)["\']\s*,\s*name=["\']([^"\']+)["\']\)\.fill\((.+)\)', stripped)
+
+                if match1:
+                    page_var = match1.group(1)
+                    selector = match1.group(2)
+                    text = match1.group(3)
+                    modified_line = f'{indent_str}human_type({page_var}, "{selector}", {text})'
+                    added_delay = True
+                elif match2:
+                    page_var = match2.group(1)
+                    selector = match2.group(2)
+                    text = match2.group(3)
+                    modified_line = f'{indent_str}human_type({page_var}, "{selector}", {text})'
+                    added_delay = True
+                elif match3:
+                    page_var = match3.group(1)
+                    role = match3.group(2)
+                    name = match3.group(3)
+                    text = match3.group(4)
+                    modified_line = f'{indent_str}human_type({page_var}, None, {text}, by_role="{role}", name="{name}")'
+                    added_delay = True
+
+            # 2. Заменяем .click() на human_move_to() + .click() (опционально)
+            # Пока не добавляем, т.к. может быть слишком медленно
+            # Можно добавить позже как опцию
+
+            result_lines.append(modified_line)
+
+            # 3. Добавляем human_delay() после действий
+            if added_delay:
+                # Используем диапазон 300-800мс для задержки после ввода текста
+                result_lines.append(f'{indent_str}human_delay(300, 800)')
+            elif '.click()' in stripped and not '#' in stripped:
+                # Добавляем задержку после кликов
+                result_lines.append(f'{indent_str}human_delay(300, 800)')
+
+        return '\n'.join(result_lines)
+
     def _add_error_handling_to_actions(self, code: str) -> str:
         """
         Добавляет обработку ошибок для Playwright действий
@@ -2533,8 +2611,12 @@ def run_iteration(page, data_row: Dict, iteration_number: int):
         if not code or not code.strip():
             return code
 
-        # ВАЖНО: Заменяем .fill() на .press_sequentially() с симуляцией ввода
-        if self.simulate_typing and '.fill(' in code:
+        # 🤖 HUMANIZE: Если humanize включен, используем человекоподобное поведение вместо стандартного
+        # Это происходит ПЕРЕД всеми другими преобразованиями
+        if hasattr(self, '_humanize_enabled') and self._humanize_enabled:
+            code = self._apply_humanize_transformations(code)
+        # Иначе используем старую логику симуляции ввода
+        elif self.simulate_typing and '.fill(' in code:
             typing_delay_sec = self.typing_delay / 1000  # Конвертация мс в секунды
             # Паттерн: .fill("text") или .fill('text') или .fill(variable)
             pattern = r'\.fill\(([^)]+)\)'
