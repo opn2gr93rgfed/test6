@@ -632,6 +632,9 @@ class ModernAppV3(ctk.CTk):
             text_color=self.theme['text_secondary']
         ).grid(row=2, column=2, padx=(5, 15), pady=10, sticky="w")
 
+        # 🗑️ Одноразовые профили
+        self.disposable_profiles_var = tk.BooleanVar(value=False)  # По умолчанию выключено
+
         # Симуляция ввода текста
         self.simulate_typing_var = tk.BooleanVar(value=True)  # По умолчанию включено
         simulate_typing_checkbox = ctk.CTkCheckBox(
@@ -734,6 +737,25 @@ class ModernAppV3(ctk.CTk):
             font=(ModernTheme.FONT['family'], 9),
             text_color=self.theme['text_secondary']
         ).grid(row=5, column=3, padx=(5, 15), pady=10, sticky="w")
+
+        # 🗑️ Одноразовые профили
+        disposable_profiles_checkbox = ctk.CTkCheckBox(
+            timeouts_frame,
+            text="🗑️ Одноразовые профили (удалять после каждой итерации)",
+            variable=self.disposable_profiles_var,
+            font=(ModernTheme.FONT['family'], 11, 'bold'),
+            text_color=self.theme['text_primary'],
+            fg_color=self.theme['accent_error'],
+            hover_color=self.theme['accent_warning']
+        )
+        disposable_profiles_checkbox.grid(row=6, column=0, columnspan=3, padx=(15, 5), pady=10, sticky="w")
+
+        ctk.CTkLabel(
+            timeouts_frame,
+            text="⚠️ Профиль будет остановлен и удалён после завершения итерации",
+            font=(ModernTheme.FONT['family'], 9),
+            text_color=self.theme['accent_warning']
+        ).grid(row=6, column=3, columnspan=3, padx=(5, 15), pady=10, sticky="w")
 
         # ========== КНОПКИ ДЕЙСТВИЙ (АДАПТИВНЫЙ LAYOUT 2x3) ==========
         btn_frame = ctk.CTkFrame(tab, fg_color="transparent")
@@ -1221,7 +1243,9 @@ class ModernAppV3(ctk.CTk):
                 'nine_proxy_ports': nine_proxy_ports,  # [6001, 6002, ...]
                 'nine_proxy_api_url': nine_proxy_api_url,
                 'nine_proxy_strategy': nine_proxy_strategy,
-                'nine_proxy_auto_rotate': nine_proxy_auto_rotate
+                'nine_proxy_auto_rotate': nine_proxy_auto_rotate,
+                # 🗑️ ОДНОРАЗОВЫЕ ПРОФИЛИ
+                'disposable_profiles': self.disposable_profiles_var.get()
             }
 
             print(f"[DEBUG] API Token: {config['api_token'][:10]}..." if config['api_token'] else "[DEBUG] API Token: пуст")
@@ -1261,7 +1285,9 @@ class ModernAppV3(ctk.CTk):
             self.append_log(f"[INFO] Генерация Playwright скрипта (Provider: {selected_provider})...", "INFO")
 
             try:
+                # Принудительная перезагрузка модуля (для применения изменений без перезапуска GUI)
                 generator_module = importlib.import_module(f"src.providers.{selected_provider}.generator")
+                importlib.reload(generator_module)  # Перезагрузить модуль с диска
                 generator = generator_module.Generator()
                 generated_script = generator.generate_script(user_code, config)
             except Exception as e:

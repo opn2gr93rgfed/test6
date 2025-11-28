@@ -59,6 +59,7 @@ class Generator:
 
         threads_count = config.get('threads_count', 1)
         max_iterations = config.get('max_iterations', None)  # None = все строки CSV
+        disposable_profiles = config.get('disposable_profiles', False)  # Одноразовые профили
         network_capture_patterns = config.get('network_capture_patterns', [])
 
         # 🔥 9Proxy настройки
@@ -101,7 +102,8 @@ class Generator:
         script = self._generate_imports()
         script += self._generate_config(api_token, proxy_config, proxy_list_config, threads_count, max_iterations,
                                         nine_proxy_enabled, nine_proxy_api_url, nine_proxy_ports, nine_proxy_strategy, nine_proxy_auto_rotate,
-                                        nine_proxy_country, nine_proxy_state, nine_proxy_city, nine_proxy_isp, nine_proxy_plan)
+                                        nine_proxy_country, nine_proxy_state, nine_proxy_city, nine_proxy_isp, nine_proxy_plan,
+                                        disposable_profiles)
         script += self._generate_proxy_rotation()
         script += self._generate_nine_proxy_rotation()  # 🔥 9Proxy функция ротации
         script += self._generate_octobrowser_functions(profile_config)
@@ -146,23 +148,25 @@ class Generator:
             if not stripped or stripped.startswith('import ') or stripped.startswith('from '):
                 continue
 
-            # 🔥 Улучшенное пропускание boilerplate
-            # Пропускаем всё до первого реального действия (page.goto, page.get_by_role, etc)
+            # 🔥 Паттерны boilerplate которые ВСЕГДА пропускаем (в любом месте кода)
+            boilerplate_patterns = [
+                'def run(',
+                'browser = playwright.',
+                'context = browser.',
+                'page = context.',
+                'with sync_playwright()',
+                'run(playwright)',  # Вызов функции run в конце
+                'with page.context.expect_page()',  # Playwright recorder boilerplate
+                '.close()',
+                '# -----------'  # Разделители из Playwright recorder
+            ]
+
+            # Всегда пропускаем boilerplate строки
+            if any(pattern in stripped for pattern in boilerplate_patterns):
+                continue
+
+            # 🔥 Пропускаем всё до первого реального действия
             if skip_boilerplate:
-                # Паттерны boilerplate которые всегда нужно пропускать
-                boilerplate_patterns = [
-                    'def run(',
-                    'browser = playwright.',
-                    'context = browser.',
-                    'page = context.',
-                    'with sync_playwright()',
-                    '.close()'
-                ]
-
-                # Пропускаем если это boilerplate
-                if any(pattern in stripped for pattern in boilerplate_patterns):
-                    continue
-
                 # Список паттернов которые означают начало реального кода
                 real_code_patterns = [
                     'page.goto(',
@@ -179,7 +183,7 @@ class Generator:
                 if any(pattern in stripped for pattern in real_code_patterns):
                     skip_boilerplate = False
                 else:
-                    # Пропускаем эту строку (это boilerplate)
+                    # Пропускаем эту строку (это начальный boilerplate)
                     continue
 
             # Отслеживание popup окон - переключаем в post_section
@@ -453,7 +457,8 @@ from typing import Dict, List, Optional
                          nine_proxy_enabled: bool = False, nine_proxy_api_url: str = '', nine_proxy_ports: List = [],
                          nine_proxy_strategy: str = 'sequential', nine_proxy_auto_rotate: bool = True,
                          nine_proxy_country: str = '', nine_proxy_state: str = '', nine_proxy_city: str = '',
-                         nine_proxy_isp: str = '', nine_proxy_plan: str = 'all') -> str:
+                         nine_proxy_isp: str = '', nine_proxy_plan: str = 'all',
+                         disposable_profiles: bool = False) -> str:
         config = f'''# ============================================================
 # КОНФИГУРАЦИЯ
 # ============================================================
@@ -471,6 +476,9 @@ THREADS_COUNT = {threads_count}
 
 # Лимит итераций (None = обработать все строки CSV)
 MAX_ITERATIONS = {max_iterations if max_iterations is not None else 'None'}
+
+# Одноразовые профили (удалять после каждой итерации)
+DISPOSABLE_PROFILES = {disposable_profiles}
 
 # Lock для синхронизации записи в CSV файл (защита от race condition)
 csv_write_lock = threading.Lock()
@@ -558,13 +566,11 @@ _proxy_lock = threading.Lock()
 
 def rotate_proxy_for_port(port: int) -> bool:
     """
-    Обновить IP для конкретного порта через 9Proxy API
+    Ротация прокси для порта — получить НОВЫЙ IP
 
-    Args:
-        port: Локальный порт для обновления
-
-    Returns:
-        True если успешно, False если ошибка
+    Использует /api/proxy с параметром port= который автоматически:
+    1. Берёт новый IP из пула (НЕ из today_list!)
+    2. Привязывает его к указанному порту
     """
     if not NINE_PROXY_ENABLED:
         return False
@@ -572,10 +578,13 @@ def rotate_proxy_for_port(port: int) -> bool:
     try:
         import requests
 
-        # Подготовить параметры запроса с фильтрами
-        params = {'num': 1, 't': 2}
+        # Формируем параметры — port= это ключ!
+        params = {
+            'num': 1,
+            'port': port,  # Автоматически привязывает новый IP к этому порту
+            't': 2
+        }
 
-        # Добавить фильтры если они указаны
         if NINE_PROXY_COUNTRY:
             params['country'] = NINE_PROXY_COUNTRY
         if NINE_PROXY_STATE:
@@ -587,133 +596,30 @@ def rotate_proxy_for_port(port: int) -> bool:
         if NINE_PROXY_PLAN:
             params['plan'] = NINE_PROXY_PLAN
 
-        # Логирование запроса с фильтрами
-        filter_info = []
-        if NINE_PROXY_COUNTRY:
-            filter_info.append(f"country={NINE_PROXY_COUNTRY}")
-        if NINE_PROXY_STATE:
-            filter_info.append(f"state={NINE_PROXY_STATE}")
-        if NINE_PROXY_CITY:
-            filter_info.append(f"city={NINE_PROXY_CITY}")
-        if NINE_PROXY_ISP:
-            filter_info.append(f"isp={NINE_PROXY_ISP}")
-        if NINE_PROXY_PLAN:
-            filter_info.append(f"plan={NINE_PROXY_PLAN}")
+        print(f"[9PROXY] Ротация порта {port} -> запрос нового IP...")
 
-        filter_str = ", ".join(filter_info) if filter_info else "без фильтров"
-        print(f"[9PROXY] Запрос прокси для порта {port} ({filter_str})")
-
-        # Получить новый прокси из API с фильтрами
         response = requests.get(
             f"{NINE_PROXY_API_URL}/api/proxy",
             params=params,
-            timeout=5
+            timeout=10
         )
 
         if response.status_code != 200:
-            print(f"[9PROXY] [ERROR] Ошибка получения прокси: HTTP {response.status_code}")
-            print(f"[9PROXY] [DEBUG] Response text: {response.text[:200]}")
+            print(f"[9PROXY] [ERROR] HTTP {response.status_code}")
             return False
 
         data = response.json()
-        print(f"[9PROXY] [DEBUG] API response: {data}")
 
         if data.get('error'):
-            print(f"[9PROXY] [ERROR] API вернул ошибку: {data.get('error')}")
+            print(f"[9PROXY] [ERROR] {data.get('message')}")
             return False
 
-        if not data.get('data'):
-            print(f"[9PROXY] [ERROR] Нет доступных прокси с указанными фильтрами")
-            print(f"[9PROXY] [DEBUG] Full response: {data}")
-            return False
-
-        # 🔥 9Proxy API может возвращать либо строки '127.0.0.1:6000' либо объекты
-        proxy_data = data['data'][0]
-
-        # Проверяем тип данных
-        if isinstance(proxy_data, str):
-            # Строка формата '127.0.0.1:6000' - нужно получить реальный ID прокси
-            print(f"[9PROXY] [DEBUG] API вернул строку: {proxy_data}")
-            print(f"[9PROXY] [WARNING] Для ротации нужен ID прокси, пробую /api/today_list...")
-
-            # Получаем список прокси с ID через /api/today_list
-            try:
-                list_response = requests.get(
-                    f"{NINE_PROXY_API_URL}/api/today_list",
-                    params=params,
-                    timeout=5
-                )
-
-                if list_response.status_code == 200:
-                    list_data = list_response.json()
-                    print(f"[9PROXY] [DEBUG] today_list response: {list_data}")
-
-                    if list_data.get('data') and len(list_data['data']) > 0:
-                        proxy = list_data['data'][0]
-                        if isinstance(proxy, dict):
-                            proxy_id = proxy.get('id')
-                            proxy_ip = proxy.get('ip', 'unknown')
-                            proxy_country = proxy.get('country_code', 'unknown')
-                        else:
-                            print(f"[9PROXY] [ERROR] today_list тоже вернул строку вместо объекта")
-                            return False
-                    else:
-                        print(f"[9PROXY] [ERROR] today_list не вернул данных")
-                        return False
-                else:
-                    print(f"[9PROXY] [ERROR] today_list HTTP {list_response.status_code}")
-                    return False
-            except Exception as e:
-                print(f"[9PROXY] [ERROR] Ошибка при запросе today_list: {e}")
-                return False
-        else:
-            # Объект с полями id, ip, country_code
-            proxy = proxy_data
-            proxy_id = proxy.get('id')
-            proxy_ip = proxy.get('ip', 'unknown')
-            proxy_country = proxy.get('country_code', 'unknown')
-
-        if not proxy_id:
-            print(f"[9PROXY] [ERROR] Прокси не имеет ID")
-            return False
-
-        # Определить план для forward запроса
-        forward_plan = NINE_PROXY_PLAN if NINE_PROXY_PLAN else '2'  # default to free
-
-        # Переадресовать на наш порт
-        forward_params = {'id': proxy_id, 'port': port, 't': 2}
-        if forward_plan:
-            forward_params['plan'] = forward_plan
-
-        print(f"[9PROXY] [DEBUG] Forward request: {NINE_PROXY_API_URL}/api/forward?{forward_params}")
-
-        forward_response = requests.get(
-            f"{NINE_PROXY_API_URL}/api/forward",
-            params=forward_params,
-            timeout=5
-        )
-
-        print(f"[9PROXY] [DEBUG] Forward response status: {forward_response.status_code}")
-
-        if forward_response.status_code == 200:
-            forward_data = forward_response.json()
-            print(f"[9PROXY] [DEBUG] Forward response data: {forward_data}")
-
-            if not forward_data.get('error'):
-                print(f"[9PROXY] [OK] Порт {port} обновлен -> {proxy_ip} ({proxy_country}) [ID: {proxy_id}]")
-                return True
-            else:
-                print(f"[9PROXY] [ERROR] Forward ошибка: {forward_data.get('message')} | Full error: {forward_data.get('error')}")
-                return False
-        else:
-            print(f"[9PROXY] [ERROR] Ошибка forward: HTTP {forward_response.status_code}")
-            print(f"[9PROXY] [DEBUG] Forward response text: {forward_response.text[:200]}")
-            return False
+        result = data.get('data', [])
+        print(f"[9PROXY] [OK] Порт {port} -> новый IP назначен")
+        return True
 
     except Exception as e:
-        print(f"[9PROXY] [ERROR] Ошибка ротации порта {port}: {e}")
-        import traceback
-        traceback.print_exc()
+        print(f"[9PROXY] [ERROR] Ротация порта {port}: {e}")
         return False
 
 def get_nine_proxy_for_thread(thread_id: int) -> Optional[Dict]:
@@ -765,48 +671,64 @@ def get_nine_proxy_for_thread(thread_id: int) -> Optional[Dict]:
 
 def initialize_nine_proxy_ports() -> bool:
     """
-    Проверить доступность портов 9Proxy
+    Инициализация портов 9Proxy
 
-    9Proxy API возвращает готовые локальные порты (127.0.0.1:6000-6009),
-    которые УЖЕ переадресуют на реальные IP. Не нужно вручную назначать прокси.
-
-    Returns:
-        True если успешно, False если ошибка
+    Для каждого порта вызывает /api/proxy?port=X
+    который автоматически назначает новый IP
     """
     if not NINE_PROXY_ENABLED or not NINE_PROXY_PORTS:
         return True
 
-    print(f"[9PROXY INIT] Проверка {len(NINE_PROXY_PORTS)} портов...")
+    print(f"[9PROXY INIT] Инициализация {len(NINE_PROXY_PORTS)} портов...")
     print(f"[9PROXY INIT] API URL: {NINE_PROXY_API_URL}")
     print(f"[9PROXY INIT] Порты: {NINE_PROXY_PORTS}")
 
     try:
         import requests
 
-        # Просто проверим что API доступен
-        response = requests.get(
-            f"{NINE_PROXY_API_URL}/api/proxy",
-            params={'num': 1, 't': 2},
-            timeout=5
-        )
+        success_count = 0
 
-        if response.status_code == 200:
-            print(f"[9PROXY INIT] [OK] API доступен")
+        for port in NINE_PROXY_PORTS:
+            print(f"[9PROXY INIT] Настройка порта {port}...")
 
-            # Проинициализировать каждый порт с правильными фильтрами
-            print(f"[9PROXY INIT] Инициализация портов с фильтрами...")
-            for port in NINE_PROXY_PORTS:
-                print(f"[9PROXY INIT] Настройка порта {port}...")
-                rotate_proxy_for_port(port)
+            params = {
+                'num': 1,
+                'port': port,
+                't': 2
+            }
 
-            print(f"[9PROXY INIT] [OK] Все порты настроены")
-            return True
-        else:
-            print(f"[9PROXY INIT] [WARNING] API недоступен: HTTP {response.status_code}")
-            return False
+            if NINE_PROXY_COUNTRY:
+                params['country'] = NINE_PROXY_COUNTRY
+            if NINE_PROXY_STATE:
+                params['state'] = NINE_PROXY_STATE
+            if NINE_PROXY_CITY:
+                params['city'] = NINE_PROXY_CITY
+            if NINE_PROXY_ISP:
+                params['isp'] = NINE_PROXY_ISP
+            if NINE_PROXY_PLAN:
+                params['plan'] = NINE_PROXY_PLAN
+
+            response = requests.get(
+                f"{NINE_PROXY_API_URL}/api/proxy",
+                params=params,
+                timeout=10
+            )
+
+            if response.status_code == 200:
+                data = response.json()
+                if not data.get('error'):
+                    print(f"[9PROXY INIT] [OK] Порт {port} -> IP назначен")
+                    success_count += 1
+                else:
+                    print(f"[9PROXY INIT] [ERROR] Порт {port}: {data.get('message')}")
+            else:
+                print(f"[9PROXY INIT] [ERROR] Порт {port}: HTTP {response.status_code}")
+
+        print(f"[9PROXY INIT] Настроено портов: {success_count}/{len(NINE_PROXY_PORTS)}")
+        return success_count > 0
 
     except Exception as e:
-        print(f"[9PROXY INIT] [ERROR] Ошибка подключения к API: {e}")
+        print(f"[9PROXY INIT] [ERROR] {e}")
         return False
 
 '''
@@ -1056,25 +978,108 @@ def start_profile(profile_uuid: str) -> Optional[Dict]:
     return None
 
 
-def stop_profile(profile_uuid: str):
-    """Остановить профиль"""
-    url = f"{{LOCAL_API_URL}}/profiles/{{profile_uuid}}/stop"
+# ============================================================
+# ОСТАНОВКА И УДАЛЕНИЕ ПРОФИЛЕЙ
+# ============================================================
+
+def stop_profile(profile_uuid: str) -> bool:
+    """
+    Остановить профиль через Cloud API (force_stop)
+
+    Endpoint: POST /profiles/{{uuid}}/force_stop
+    """
+    if not profile_uuid:
+        return False
+
+    url = f"{{API_BASE_URL}}/profiles/{{profile_uuid}}/force_stop"
+    headers = {{
+        "Content-Type": "application/json",
+        "X-Octo-Api-Token": API_TOKEN
+    }}
+    body = {{"version": None}}
+
     try:
-        requests.get(url, timeout=10)
-        print(f"[PROFILE] [OK] Профиль остановлен")
-    except:
-        pass
+        response = requests.post(url, headers=headers, json=body, timeout=30)
+
+        if response.status_code == 200:
+            result = response.json()
+            if result.get('success'):
+                print(f"[PROFILE] [STOPPED] {{profile_uuid[:8]}}...")
+                return True
+
+        # 409 = профиль уже остановлен (это ОК)
+        if response.status_code == 409:
+            print(f"[PROFILE] [INFO] Профиль уже остановлен: {{profile_uuid[:8]}}...")
+            return True
+
+        print(f"[PROFILE] [WARN] HTTP {{response.status_code}} при остановке")
+        return False
+
+    except Exception as e:
+        print(f"[PROFILE] [WARN] Ошибка остановки: {{e}}")
+        return False
 
 
-def delete_profile(profile_uuid: str):
-    """Удалить профиль"""
-    url = f"{{API_BASE_URL}}/profiles/{{profile_uuid}}"
-    headers = {{"X-Octo-Api-Token": API_TOKEN}}
+def delete_profile(profile_uuid: str) -> bool:
+    """
+    Удалить профиль через Cloud API
+
+    Endpoint: DELETE /profiles с body {{"uuids": [...]}}
+    ВАЖНО: Метод DELETE, не POST!
+    """
+    if not profile_uuid:
+        return False
+
+    url = f"{{API_BASE_URL}}/profiles"
+    headers = {{
+        "Content-Type": "application/json",
+        "X-Octo-Api-Token": API_TOKEN
+    }}
+    body = {{"uuids": [profile_uuid]}}
+
     try:
-        requests.delete(url, headers=headers, timeout=10)
-        print(f"[PROFILE] [OK] Профиль удалён")
-    except:
-        pass
+        response = requests.delete(url, headers=headers, json=body, timeout=30)
+
+        if response.status_code == 200:
+            result = response.json()
+            if result.get('success'):
+                deleted = result.get('data', {{}}).get('deleted_uuids', [])
+                if profile_uuid in deleted:
+                    print(f"[PROFILE] [DELETED] {{profile_uuid[:8]}}...")
+                    return True
+
+        print(f"[PROFILE] [ERROR] HTTP {{response.status_code}} при удалении")
+        return False
+
+    except Exception as e:
+        print(f"[PROFILE] [ERROR] Ошибка удаления: {{e}}")
+        return False
+
+
+def cleanup_profile(profile_uuid: str) -> bool:
+    """
+    Полная очистка профиля: остановка → пауза → удаление
+    """
+    if not profile_uuid:
+        return False
+
+    print(f"[CLEANUP] Очистка профиля {{profile_uuid[:8]}}...")
+
+    # 1. Остановка
+    stop_profile(profile_uuid)
+
+    # 2. Пауза для синхронизации
+    time.sleep(2)
+
+    # 3. Удаление
+    success = delete_profile(profile_uuid)
+
+    if success:
+        print(f"[CLEANUP] [OK] Профиль полностью очищен")
+    else:
+        print(f"[CLEANUP] [FAIL] Не удалось удалить профиль")
+
+    return success
 
 
 '''
@@ -2834,7 +2839,15 @@ def process_task(task_data: tuple) -> Dict:
         print(f"[THREAD {thread_id}] Задержка запуска: {startup_delay}s (снижение нагрузки)")
         time.sleep(startup_delay)
 
+    # ========================================
+    # ВАЖНО: Объявляем ВСЕ переменные ДО try!
+    # ========================================
     profile_uuid = None
+    browser = None
+    context = None
+    page = None
+    playwright_instance = None
+
     result = {
         'thread_id': thread_id,
         'iteration': iteration_number,
@@ -2853,7 +2866,7 @@ def process_task(task_data: tuple) -> Dict:
         if not profile_uuid:
             result['error'] = "Profile creation failed"
             print(f"[THREAD {thread_id}] [ERROR] {result['error']}")
-            return result
+            raise Exception("Profile creation failed")
 
         print(f"[THREAD {thread_id}] Ожидание синхронизации (5 сек)...")
         time.sleep(5)
@@ -2862,34 +2875,34 @@ def process_task(task_data: tuple) -> Dict:
         if not start_data:
             result['error'] = "Profile start failed"
             print(f"[THREAD {thread_id}] [ERROR] {result['error']}")
-            return result
+            raise Exception("Profile start failed")
 
         debug_url = start_data.get('ws_endpoint')
         if not debug_url:
             result['error'] = "No CDP endpoint"
             print(f"[THREAD {thread_id}] [ERROR] {result['error']}")
-            return result
+            raise Exception("No CDP endpoint")
 
-        with sync_playwright() as playwright:
-            browser = playwright.chromium.connect_over_cdp(debug_url)
-            context = browser.contexts[0]
-            page = context.pages[0]
+        # ========================================
+        # Создаем Playwright БЕЗ with (для доступа в finally)
+        # ========================================
+        playwright_instance = sync_playwright().start()
+        browser = playwright_instance.chromium.connect_over_cdp(debug_url)
+        context = browser.contexts[0]
+        page = context.pages[0]
 
-            page.set_default_timeout(DEFAULT_TIMEOUT)
-            page.set_default_navigation_timeout(NAVIGATION_TIMEOUT)
+        page.set_default_timeout(DEFAULT_TIMEOUT)
+        page.set_default_navigation_timeout(NAVIGATION_TIMEOUT)
 
-            # run_iteration теперь возвращает tuple (success, extracted_fields)
-            iteration_success, extracted_fields = run_iteration(page, data_row, iteration_number)
+        # run_iteration теперь возвращает tuple (success, extracted_fields)
+        iteration_success, extracted_fields = run_iteration(page, data_row, iteration_number)
 
-            if iteration_success:
-                result['success'] = True
-            else:
-                result['error'] = "Iteration failed"
+        if iteration_success:
+            result['success'] = True
+        else:
+            result['error'] = "Iteration failed"
 
-            time.sleep(2)
-            browser.close()
-
-        stop_profile(profile_uuid)
+        time.sleep(2)
 
         # 🔥 Ротация 9Proxy после завершения итерации
         if NINE_PROXY_ENABLED and NINE_PROXY_PORTS:
@@ -2922,8 +2935,46 @@ def process_task(task_data: tuple) -> Dict:
         result['error'] = str(e)
 
     finally:
+        # ========================================================
+        # ЭТОТ БЛОК ВЫПОЛНИТСЯ ВСЕГДА!
+        # Порядок: CDP close -> browser close -> stop -> delete
+        # ========================================================
+
+        # 1. Закрыть браузер через CDP (гарантированно закрывает окно)
+        if context and page:
+            try:
+                cdp = context.new_cdp_session(page)
+                cdp.send("Browser.close")
+                print(f"[THREAD {thread_id}] [OK] Браузер закрыт через CDP")
+            except Exception as e:
+                print(f"[THREAD {thread_id}] [WARN] CDP close failed: {e}")
+
+        # 2. Закрыть соединение Playwright
+        if browser:
+            try:
+                browser.close()
+            except:
+                pass
+
+        # 3. Остановить Playwright instance
+        if playwright_instance:
+            try:
+                playwright_instance.stop()
+            except:
+                pass
+
+        # 4. Очистить профиль Octobrowser
         if profile_uuid:
-            time.sleep(1)
+            if DISPOSABLE_PROFILES:
+                print(f"[THREAD {thread_id}] [DISPOSE] Удаление одноразового профиля...")
+                if cleanup_profile(profile_uuid):
+                    print(f"[THREAD {thread_id}] [OK] Профиль удален")
+                else:
+                    print(f"[THREAD {thread_id}] [FAIL] Не удалось удалить профиль")
+            else:
+                # Просто останавливаем, не удаляем
+                stop_profile(profile_uuid)
+                print(f"[THREAD {thread_id}] Профиль остановлен (сохранен)")
 
     return result
 
