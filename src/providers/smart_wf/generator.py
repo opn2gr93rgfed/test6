@@ -96,6 +96,17 @@ class Generator:
         # Задержка между действиями (клики, заполнения)
         self.action_delay = config.get('action_delay', 0.5)
 
+        # 🔥 Humanize конфигурация (человекоподобное поведение)
+        humanize_config = config.get('humanize', {})
+        if not isinstance(humanize_config, dict):
+            humanize_config = {}
+        humanize_enabled = humanize_config.get('enabled', True)
+        typing_speed = humanize_config.get('typing_speed', 'normal')
+        mouse_speed = humanize_config.get('mouse_speed', 'normal')
+        scroll_behavior = humanize_config.get('scroll_behavior', 'smooth')
+        make_typos = humanize_config.get('make_typos', True)
+        typo_rate = humanize_config.get('typo_rate', 0.05)
+
         # ПАРСИНГ: Извлекаем вопросы и действия из user_code
         questions_pool, pre_questions_code, post_questions_code = self._parse_user_code(user_code)
 
@@ -103,11 +114,12 @@ class Generator:
         script += self._generate_config(api_token, proxy_config, proxy_list_config, threads_count, max_iterations,
                                         nine_proxy_enabled, nine_proxy_api_url, nine_proxy_ports, nine_proxy_strategy, nine_proxy_auto_rotate,
                                         nine_proxy_country, nine_proxy_state, nine_proxy_city, nine_proxy_isp, nine_proxy_plan,
-                                        disposable_profiles)
+                                        disposable_profiles, humanize_enabled, typing_speed, mouse_speed, scroll_behavior, make_typos, typo_rate)
         script += self._generate_proxy_rotation()
         script += self._generate_nine_proxy_rotation()  # 🔥 9Proxy функция ротации
         script += self._generate_octobrowser_functions(profile_config)
         script += self._generate_helpers()
+        script += self._generate_humanize_helpers()  # 🔥 Функции человекоподобного поведения
         script += self._generate_csv_loader()
         script += self._generate_questions_pool(questions_pool)  # 🔥 СЛОВАРЬ ВОПРОСОВ
         script += self._generate_answer_question_function()  # 🔥 ФУНКЦИЯ ПОИСКА И ОТВЕТА
@@ -446,6 +458,7 @@ import random
 import re
 import os
 import datetime
+import math
 from tkinter import Tk, filedialog
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from playwright.sync_api import sync_playwright, expect, TimeoutError as PlaywrightTimeout
@@ -458,7 +471,9 @@ from typing import Dict, List, Optional
                          nine_proxy_strategy: str = 'sequential', nine_proxy_auto_rotate: bool = True,
                          nine_proxy_country: str = '', nine_proxy_state: str = '', nine_proxy_city: str = '',
                          nine_proxy_isp: str = '', nine_proxy_plan: str = 'all',
-                         disposable_profiles: bool = False) -> str:
+                         disposable_profiles: bool = False,
+                         humanize_enabled: bool = True, typing_speed: str = 'normal', mouse_speed: str = 'normal',
+                         scroll_behavior: str = 'smooth', make_typos: bool = True, typo_rate: float = 0.05) -> str:
         config = f'''# ============================================================
 # КОНФИГУРАЦИЯ
 # ============================================================
@@ -551,6 +566,28 @@ QUESTION_SEARCH_TIMEOUT = 5000  # 5 секунд для поиска вопро�
 # Thread-safe счетчик для round-robin
 _proxy_counter = 0
 _proxy_lock = threading.Lock()
+
+'''
+
+        # 🔥 Humanize конфигурация (человекоподобное поведение)
+        # Скорость печатания: slow=300ms, normal=150ms, fast=80ms
+        typing_speed_map = {'slow': 300, 'normal': 150, 'fast': 80}
+        typing_delay_mean = typing_speed_map.get(typing_speed, 150)
+
+        # Скорость мыши: slow=20ms, normal=10ms, fast=5ms
+        mouse_speed_map = {'slow': 20, 'normal': 10, 'fast': 5}
+        mouse_delay = mouse_speed_map.get(mouse_speed, 10)
+
+        config += f'''# 🔥 Humanize - человекоподобное поведение (антидетект)
+HUMANIZE_ENABLED = {humanize_enabled}
+TYPING_SPEED = "{typing_speed}"  # slow/normal/fast
+TYPING_DELAY_MEAN = {typing_delay_mean}  # Среднее время между символами (мс)
+TYPING_DELAY_STD = 50  # Отклонение времени между символами (мс)
+MOUSE_SPEED = "{mouse_speed}"  # slow/normal/fast
+MOUSE_DELAY = {mouse_delay}  # Задержка между точками траектории (мс)
+SCROLL_BEHAVIOR = "{scroll_behavior}"  # smooth/instant
+MAKE_TYPOS = {make_typos}  # Случайные опечатки
+TYPO_RATE = {typo_rate}  # Шанс опечатки (0.05 = 5%)
 
 '''
         return config
@@ -1314,6 +1351,260 @@ def execute_special_command(command: str, page, data_row: Dict):
         except Exception as e:
             print(f'[SWITCHES] [ERROR] {e}', flush=True)
         return
+
+
+'''
+
+    def _generate_humanize_helpers(self) -> str:
+        """Генерация функций для человекоподобного поведения (антидетект)"""
+        return '''# ============================================================
+# HUMANIZE - ЧЕЛОВЕКОПОДОБНОЕ ПОВЕДЕНИЕ (АНТИДЕТЕКТ)
+# ============================================================
+
+def human_delay(min_ms: float, max_ms: float):
+    """
+    Случайная задержка в диапазоне min_ms - max_ms
+
+    Args:
+        min_ms: Минимальная задержка в миллисекундах
+        max_ms: Максимальная задержка в миллисекундах
+    """
+    if not HUMANIZE_ENABLED:
+        return
+
+    delay_seconds = random.uniform(min_ms, max_ms) / 1000.0
+    time.sleep(delay_seconds)
+
+
+def human_type(page, selector: str, text: str, by_role: str = None, name: str = None):
+    """
+    Человекоподобный ввод текста с рандомизацией
+
+    Особенности:
+    - Задержка между символами: нормальное распределение (среднее TYPING_DELAY_MEAN мс)
+    - Дополнительная пауза после пробела: 50-150 мс
+    - Случайные "ошибки" с исправлением (TYPO_RATE шанс)
+    - Пауза перед началом ввода: 200-500 мс
+
+    Args:
+        page: Playwright page
+        selector: CSS селектор или None если используется by_role
+        text: Текст для ввода
+        by_role: Роль элемента (например, "textbox")
+        name: Имя элемента для get_by_role
+    """
+    if not HUMANIZE_ENABLED:
+        # Обычный быстрый ввод
+        if by_role:
+            page.get_by_role(by_role, name=name).fill(text)
+        else:
+            page.locator(selector).fill(text)
+        return
+
+    # Находим элемент
+    if by_role:
+        element = page.get_by_role(by_role, name=name)
+    else:
+        element = page.locator(selector)
+
+    # Очищаем поле
+    element.click()
+    element.fill('')
+
+    # Пауза перед началом ввода
+    human_delay(200, 500)
+
+    # Посимвольный ввод
+    for i, char in enumerate(text):
+        # Проверяем нужно ли сделать опечатку
+        if MAKE_TYPOS and random.random() < TYPO_RATE:
+            # Набираем случайный неверный символ
+            wrong_chars = 'qwertyuiopasdfghjklzxcvbnm'
+            wrong_char = random.choice(wrong_chars)
+            element.type(wrong_char)
+
+            # Пауза "осознания" ошибки
+            human_delay(100, 300)
+
+            # Backspace
+            element.press('Backspace')
+
+            # Пауза перед правильным символом
+            human_delay(50, 150)
+
+        # Вводим правильный символ
+        element.type(char)
+
+        # Задержка между символами (нормальное распределение)
+        delay = max(0, random.gauss(TYPING_DELAY_MEAN, TYPING_DELAY_STD))
+        time.sleep(delay / 1000.0)
+
+        # Дополнительная пауза после пробела
+        if char == ' ':
+            human_delay(50, 150)
+
+
+def human_move_to(page, selector: str, by_role: str = None, name: str = None):
+    """
+    Человекоподобное движение мыши к элементу
+
+    Особенности:
+    - Траектория через кривую Безье с 3-4 контрольными точками
+    - Переменная скорость (медленнее в начале и конце)
+    - Микро-дрожание (±1-2px) во время движения
+
+    Args:
+        page: Playwright page
+        selector: CSS селектор или None если используется by_role
+        by_role: Роль элемента
+        name: Имя элемента для get_by_role
+    """
+    if not HUMANIZE_ENABLED:
+        return
+
+    try:
+        # Находим элемент
+        if by_role:
+            element = page.get_by_role(by_role, name=name)
+        else:
+            element = page.locator(selector)
+
+        # Получаем bounding box элемента
+        box = element.bounding_box()
+        if not box:
+            return
+
+        # Конечная точка - центр элемента + случайное смещение
+        end_x = box['x'] + box['width'] / 2 + random.uniform(-5, 5)
+        end_y = box['y'] + box['height'] / 2 + random.uniform(-5, 5)
+
+        # Генерируем кривую Безье
+        # Простая симуляция: двигаем мышь по дуге с промежуточными точками
+        num_points = random.randint(15, 25)
+
+        # Контрольные точки для кривой Безье
+        current_pos = page.evaluate('() => ({ x: window.innerWidth / 2, y: window.innerHeight / 2 })')
+        start_x = current_pos.get('x', end_x)
+        start_y = current_pos.get('y', end_y)
+
+        # Генерируем промежуточные контрольные точки
+        ctrl1_x = start_x + (end_x - start_x) * 0.25 + random.uniform(-50, 50)
+        ctrl1_y = start_y + (end_y - start_y) * 0.25 + random.uniform(-50, 50)
+        ctrl2_x = start_x + (end_x - start_x) * 0.75 + random.uniform(-50, 50)
+        ctrl2_y = start_y + (end_y - start_y) * 0.75 + random.uniform(-50, 50)
+
+        # Двигаем мышь по траектории
+        for i in range(num_points):
+            t = i / (num_points - 1)
+
+            # Кубическая кривая Безье
+            x = (1-t)**3 * start_x + 3*(1-t)**2*t * ctrl1_x + 3*(1-t)*t**2 * ctrl2_x + t**3 * end_x
+            y = (1-t)**3 * start_y + 3*(1-t)**2*t * ctrl1_y + 3*(1-t)*t**2 * ctrl2_y + t**3 * end_y
+
+            # Добавляем микро-дрожание
+            jitter_x = random.uniform(-1.5, 1.5)
+            jitter_y = random.uniform(-1.5, 1.5)
+
+            # Двигаем мышь
+            page.mouse.move(x + jitter_x, y + jitter_y)
+
+            # Задержка между точками (переменная скорость)
+            # Медленнее в начале и конце
+            speed_factor = 1.0
+            if t < 0.2 or t > 0.8:
+                speed_factor = 1.5
+
+            time.sleep(MOUSE_DELAY * speed_factor / 1000.0)
+
+    except Exception as e:
+        print(f'[HUMANIZE] [ERROR] human_move_to: {e}')
+
+
+def human_scroll_to(page, selector: str, by_role: str = None, name: str = None):
+    """
+    Плавный человекоподобный скролл к элементу
+
+    Особенности:
+    - Скроллит небольшими шагами (50-150px за раз)
+    - Переменная скорость между шагами: 30-100 мс
+    - Иногда "проскакивает" цель и возвращается назад
+    - Финальная подстройка маленькими шагами
+
+    Args:
+        page: Playwright page
+        selector: CSS селектор или None если используется by_role
+        by_role: Роль элемента
+        name: Имя элемента для get_by_role
+    """
+    if not HUMANIZE_ENABLED or SCROLL_BEHAVIOR != 'smooth':
+        # Обычный быстрый скролл
+        try:
+            if by_role:
+                element = page.get_by_role(by_role, name=name)
+            else:
+                element = page.locator(selector)
+            element.scroll_into_view_if_needed()
+        except:
+            pass
+        return
+
+    try:
+        # Находим элемент
+        if by_role:
+            element = page.get_by_role(by_role, name=name)
+        else:
+            element = page.locator(selector)
+
+        # Получаем позицию элемента
+        box = element.bounding_box()
+        if not box:
+            return
+
+        # Текущая позиция скролла
+        current_scroll = page.evaluate('window.pageYOffset')
+        target_scroll = box['y'] - 200  # Скроллим чуть выше элемента
+
+        # Иногда проскакиваем цель
+        overshoot = random.random() < 0.3
+        if overshoot:
+            target_scroll += random.uniform(100, 300)
+
+        # Скроллим небольшими шагами
+        while abs(current_scroll - target_scroll) > 10:
+            # Размер шага
+            step = random.uniform(50, 150)
+            if current_scroll < target_scroll:
+                current_scroll = min(current_scroll + step, target_scroll)
+            else:
+                current_scroll = max(current_scroll - step, target_scroll)
+
+            # Выполняем скролл
+            page.evaluate(f'window.scrollTo(0, {current_scroll})')
+
+            # Задержка между шагами
+            human_delay(30, 100)
+
+        # Если проскочили - возвращаемся
+        if overshoot:
+            real_target = box['y'] - 200
+            current_scroll = page.evaluate('window.pageYOffset')
+
+            while abs(current_scroll - real_target) > 5:
+                step = random.uniform(20, 50)
+                if current_scroll < real_target:
+                    current_scroll = min(current_scroll + step, real_target)
+                else:
+                    current_scroll = max(current_scroll - step, real_target)
+
+                page.evaluate(f'window.scrollTo(0, {current_scroll})')
+                human_delay(30, 80)
+
+        # Финальная подстройка
+        element.scroll_into_view_if_needed()
+        human_delay(100, 300)
+
+    except Exception as e:
+        print(f'[HUMANIZE] [ERROR] human_scroll_to: {e}')
 
 
 '''
