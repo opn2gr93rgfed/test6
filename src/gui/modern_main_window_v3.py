@@ -738,6 +738,118 @@ class ModernAppV3(ctk.CTk):
             text_color=self.theme['text_secondary']
         ).grid(row=5, column=3, padx=(5, 15), pady=10, sticky="w")
 
+        # 🤖 Humanize (антидетект)
+        ctk.CTkLabel(
+            timeouts_frame,
+            text="🤖 Humanize (антидетект):",
+            font=(ModernTheme.FONT['family'], 11, 'bold'),
+            text_color=self.theme['text_primary']
+        ).grid(row=6, column=0, padx=(15, 5), pady=(15, 5), sticky="w")
+
+        self.humanize_enabled_var = tk.BooleanVar(value=True)
+        humanize_enabled_checkbox = ctk.CTkCheckBox(
+            timeouts_frame,
+            text="Включить",
+            variable=self.humanize_enabled_var,
+            font=(ModernTheme.FONT['family'], 10),
+            text_color=self.theme['text_primary'],
+            fg_color=self.theme['accent_success'],
+            hover_color=self.theme['accent_primary']
+        )
+        humanize_enabled_checkbox.grid(row=6, column=1, padx=5, pady=(15, 5), sticky="w")
+
+        ctk.CTkLabel(
+            timeouts_frame,
+            text="Typing speed:",
+            font=(ModernTheme.FONT['family'], 10),
+            text_color=self.theme['text_secondary']
+        ).grid(row=6, column=2, padx=(10, 2), pady=(15, 5), sticky="e")
+
+        self.typing_speed_var = tk.StringVar(value="normal")
+        typing_speed_menu = ctk.CTkOptionMenu(
+            timeouts_frame,
+            variable=self.typing_speed_var,
+            values=["slow", "normal", "fast"],
+            width=90,
+            font=(ModernTheme.FONT['family'], 10),
+            fg_color=self.theme['bg_tertiary'],
+            button_color=self.theme['accent_primary']
+        )
+        typing_speed_menu.grid(row=6, column=3, padx=(2, 10), pady=(15, 5), sticky="w")
+
+        ctk.CTkLabel(
+            timeouts_frame,
+            text="Mouse speed:",
+            font=(ModernTheme.FONT['family'], 10),
+            text_color=self.theme['text_secondary']
+        ).grid(row=6, column=4, padx=(10, 2), pady=(15, 5), sticky="e")
+
+        self.mouse_speed_var = tk.StringVar(value="normal")
+        mouse_speed_menu = ctk.CTkOptionMenu(
+            timeouts_frame,
+            variable=self.mouse_speed_var,
+            values=["slow", "normal", "fast"],
+            width=90,
+            font=(ModernTheme.FONT['family'], 10),
+            fg_color=self.theme['bg_tertiary'],
+            button_color=self.theme['accent_primary']
+        )
+        mouse_speed_menu.grid(row=6, column=5, padx=(2, 15), pady=(15, 5), sticky="w")
+
+        # Humanize - строка 2
+        self.make_typos_var = tk.BooleanVar(value=True)
+        make_typos_checkbox = ctk.CTkCheckBox(
+            timeouts_frame,
+            text="Опечатки",
+            variable=self.make_typos_var,
+            font=(ModernTheme.FONT['family'], 10),
+            text_color=self.theme['text_secondary'],
+            fg_color=self.theme['accent_primary']
+        )
+        make_typos_checkbox.grid(row=7, column=0, padx=(15, 5), pady=5, sticky="w")
+
+        ctk.CTkLabel(
+            timeouts_frame,
+            text="Шанс:",
+            font=(ModernTheme.FONT['family'], 10),
+            text_color=self.theme['text_secondary']
+        ).grid(row=7, column=1, padx=(5, 2), pady=5, sticky="e")
+
+        self.typo_rate_var = tk.StringVar(value="0.05")
+        typo_rate_entry = ctk.CTkEntry(
+            timeouts_frame,
+            textvariable=self.typo_rate_var,
+            width=50,
+            font=(ModernTheme.FONT['family'], 10)
+        )
+        typo_rate_entry.grid(row=7, column=2, padx=(2, 5), pady=5, sticky="w")
+
+        ctk.CTkLabel(
+            timeouts_frame,
+            text="(0.05 = 5%)",
+            font=(ModernTheme.FONT['family'], 9),
+            text_color=self.theme['text_secondary']
+        ).grid(row=7, column=3, padx=(0, 10), pady=5, sticky="w")
+
+        ctk.CTkLabel(
+            timeouts_frame,
+            text="Scroll:",
+            font=(ModernTheme.FONT['family'], 10),
+            text_color=self.theme['text_secondary']
+        ).grid(row=7, column=4, padx=(10, 2), pady=5, sticky="e")
+
+        self.scroll_behavior_var = tk.StringVar(value="smooth")
+        scroll_behavior_menu = ctk.CTkOptionMenu(
+            timeouts_frame,
+            variable=self.scroll_behavior_var,
+            values=["smooth", "instant"],
+            width=90,
+            font=(ModernTheme.FONT['family'], 10),
+            fg_color=self.theme['bg_tertiary'],
+            button_color=self.theme['accent_primary']
+        )
+        scroll_behavior_menu.grid(row=7, column=5, padx=(2, 15), pady=5, sticky="w")
+
         # 🗑️ Одноразовые профили
         disposable_profiles_checkbox = ctk.CTkCheckBox(
             timeouts_frame,
@@ -748,14 +860,14 @@ class ModernAppV3(ctk.CTk):
             fg_color=self.theme['accent_error'],
             hover_color=self.theme['accent_warning']
         )
-        disposable_profiles_checkbox.grid(row=6, column=0, columnspan=3, padx=(15, 5), pady=10, sticky="w")
+        disposable_profiles_checkbox.grid(row=8, column=0, columnspan=3, padx=(15, 5), pady=(10, 10), sticky="w")
 
         ctk.CTkLabel(
             timeouts_frame,
             text="⚠️ Профиль будет остановлен и удалён после завершения итерации",
             font=(ModernTheme.FONT['family'], 9),
             text_color=self.theme['accent_warning']
-        ).grid(row=6, column=3, columnspan=3, padx=(5, 15), pady=10, sticky="w")
+        ).grid(row=8, column=3, columnspan=3, padx=(5, 15), pady=(10, 10), sticky="w")
 
         # ========== КНОПКИ ДЕЙСТВИЙ (АДАПТИВНЫЙ LAYOUT 2x3) ==========
         btn_frame = ctk.CTkFrame(tab, fg_color="transparent")
@@ -1245,7 +1357,16 @@ class ModernAppV3(ctk.CTk):
                 'nine_proxy_strategy': nine_proxy_strategy,
                 'nine_proxy_auto_rotate': nine_proxy_auto_rotate,
                 # 🗑️ ОДНОРАЗОВЫЕ ПРОФИЛИ
-                'disposable_profiles': self.disposable_profiles_var.get()
+                'disposable_profiles': self.disposable_profiles_var.get(),
+                # 🤖 HUMANIZE (антидетект)
+                'humanize': {
+                    'enabled': self.humanize_enabled_var.get(),
+                    'typing_speed': self.typing_speed_var.get(),
+                    'mouse_speed': self.mouse_speed_var.get(),
+                    'scroll_behavior': self.scroll_behavior_var.get(),
+                    'make_typos': self.make_typos_var.get(),
+                    'typo_rate': float(self.typo_rate_var.get()) if self.typo_rate_var.get().replace('.', '', 1).isdigit() else 0.05
+                }
             }
 
             print(f"[DEBUG] API Token: {config['api_token'][:10]}..." if config['api_token'] else "[DEBUG] API Token: пуст")
